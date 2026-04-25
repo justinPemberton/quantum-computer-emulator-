@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 const BOX_SIZE = 50;
 const LINE_STEP = 140;
@@ -33,6 +33,8 @@ export default function App() {
   const [djCheck, setDjCheck] = useState("");
   const [hoverSegment, setHoverSegment] = useState(null);
   const [activeSegment, setActiveSegment] = useState(null);
+  const canvasRef = useRef(null);
+  const [canvasRect, setCanvasRect] = useState(null);
 
   const [view, setView] = useState({ x: 0, y: 0, scale: 1 });
   const [dragging, setDragging] = useState(false);
@@ -49,6 +51,21 @@ export default function App() {
         }
       })
       .catch(() => setConfig(defaultConfig));
+  }, []);
+
+  useEffect(() => {
+    function updateRect() {
+      if (!canvasRef.current) return;
+      setCanvasRect(canvasRef.current.getBoundingClientRect());
+    }
+
+    updateRect();
+    window.addEventListener("resize", updateRect);
+    window.addEventListener("scroll", updateRect, true);
+    return () => {
+      window.removeEventListener("resize", updateRect);
+      window.removeEventListener("scroll", updateRect, true);
+    };
   }, []);
 
   async function saveConfig(nextConfig = config) {
@@ -281,6 +298,55 @@ export default function App() {
     setLastMouse(null);
   }
 
+  const activeInfo = useMemo(() => {
+    if (!activeSegment?.qubitId || !activeSegment?.segmentId) return null;
+    const qubit = config.circuit.qubits.find((q) => q.id === activeSegment.qubitId);
+    if (!qubit) return null;
+    const segmentIndex = qubit.segments.findIndex((s) => s.id === activeSegment.segmentId);
+    if (segmentIndex < 0) return null;
+    const segment = qubit.segments[segmentIndex];
+
+    const segmentX1 = START_X + segmentIndex * LINE_STEP;
+    const segmentX2 = segmentX1 + LINE_STEP;
+    const gateX = (segmentX1 + segmentX2) / 2;
+
+    return { qubit, segment, segmentIndex, gateX };
+  }, [activeSegment, config]);
+
+  const popupStyle = useMemo(() => {
+    if (!activeInfo || !canvasRect) return null;
+
+    const gateScreenX = activeInfo.gateX * view.scale + view.x;
+    const gateScreenY = activeInfo.qubit.y * view.scale + view.y;
+
+    const popupWidth = 320;
+    const estimatedHeight =
+      activeInfo.segment.gate === "UF" ? 320 : activeInfo.segment.gate === "SWAP" ? 220 : 220;
+
+    let left = canvasRect.left + gateScreenX;
+    let top = canvasRect.top + gateScreenY - (BOX_SIZE * view.scale) / 2 - 12;
+    let transform = "translate(-50%, -100%)";
+
+    if (top - estimatedHeight < 8) {
+      top = canvasRect.top + gateScreenY + (BOX_SIZE * view.scale) / 2 + 12;
+      transform = "translate(-50%, 0%)";
+    }
+
+    const screenW = typeof window !== "undefined" ? window.innerWidth : popupWidth;
+    const half = popupWidth / 2;
+    left = Math.min(Math.max(left, half + 8), screenW - half - 8);
+
+    return {
+      ...styles.popup,
+      position: "fixed",
+      left,
+      top,
+      transform,
+      width: popupWidth,
+      zIndex: 10000
+    };
+  }, [activeInfo, canvasRect, view]);
+
   return (
     <div style={styles.page}>
       <div style={styles.sidebar}>
@@ -304,6 +370,7 @@ export default function App() {
       </div>
 
       <div
+        ref={canvasRef}
         style={styles.canvas}
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
@@ -402,8 +469,8 @@ export default function App() {
                             width={BOX_SIZE}
                             height={BOX_SIZE}
                             fill="white"
-                            stroke="black"
-                            strokeWidth="3"
+                            stroke={isActive ? "#4c6fff" : "black"}
+                            strokeWidth={isActive ? "5" : "3"}
                           />
 
                           <text
@@ -416,154 +483,6 @@ export default function App() {
                             {gateLabel}
                           </text>
                         </g>
-                      )}
-
-                      {isActive && (
-                        <foreignObject
-                          x={gateX - 105}
-                          y={qubit.y - BOX_SIZE / 2 - 95}
-                          width={210}
-                          height={segment.gate === "UF" ? 240 : segment.gate === "SWAP" ? 180 : 140}
-                        >
-                          <div
-                            style={styles.popup}
-                            onMouseDown={(e) => e.stopPropagation()}
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <div style={styles.popupRow}>
-                              <span style={styles.popupLabel}>Gate</span>
-                              <select
-                                style={styles.popupSelect}
-                                value={hasGate ? segment.gate : "none"}
-                                onChange={(e) => {
-                                  addGate(qubit.id, segment.id, e.target.value);
-                                }}
-                              >
-                                {GATE_OPTIONS.map((g) => (
-                                  <option key={g} value={g}>
-                                    {g === "none" ? "(none)" : g}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-
-                            {segment.gate === "UF" && (
-                              <>
-                                <div style={styles.popupRow}>
-                                  <span style={styles.popupLabel}>f(x)</span>
-                                  <select
-                                    style={styles.popupSelect}
-                                    value={segment.uf?.function ?? "parity"}
-                                    onChange={(e) => {
-                                      const nextConfig = structuredClone(config);
-                                      const q = nextConfig.circuit.qubits.find((qq) => qq.id === qubit.id);
-                                      const s = q?.segments.find((ss) => ss.id === segment.id);
-                                      if (!s) return;
-                                      s.uf = s.uf ?? { function: "parity", x_bits: [] };
-                                      s.uf.function = e.target.value;
-                                      saveConfig(nextConfig);
-                                    }}
-                                  >
-                                    <option value="parity">parity</option>
-                                    <option value="const0">const0</option>
-                                    <option value="const1">const1</option>
-                                  </select>
-                                </div>
-
-                                <div style={styles.popupRow}>
-                                  <span style={styles.popupLabel}>x</span>
-                                  <select
-                                    style={{ ...styles.popupSelect, height: 90 }}
-                                    multiple
-                                    value={segment.uf?.x_bits ?? []}
-                                    onChange={(e) => {
-                                      const selected = Array.from(e.target.selectedOptions).map((o) => o.value);
-                                      const nextConfig = structuredClone(config);
-                                      const q = nextConfig.circuit.qubits.find((qq) => qq.id === qubit.id);
-                                      const s = q?.segments.find((ss) => ss.id === segment.id);
-                                      if (!s) return;
-                                      s.uf = s.uf ?? { function: "parity", x_bits: [] };
-                                      s.uf.x_bits = selected;
-                                      saveConfig(nextConfig);
-                                    }}
-                                  >
-                                    {config.circuit.qubits
-                                      .filter((qq) => qq.id !== qubit.id)
-                                      .map((qq) => (
-                                        <option key={qq.id} value={qq.id}>
-                                          {qq.id}
-                                        </option>
-                                      ))}
-                                  </select>
-                                </div>
-                              </>
-                            )}
-
-                            {segment.gate === "SWAP" && (
-                              <div style={styles.popupRow}>
-                                <span style={styles.popupLabel}>With</span>
-                                <select
-                                  style={styles.popupSelect}
-                                  value={segment.swapWith ?? ""}
-                                  onChange={(e) => {
-                                    const nextConfig = structuredClone(config);
-                                    const q = nextConfig.circuit.qubits.find((qq) => qq.id === qubit.id);
-                                    const s = q?.segments.find((ss) => ss.id === segment.id);
-                                    if (!s) return;
-                                    s.swapWith = e.target.value || null;
-                                    saveConfig(nextConfig);
-                                  }}
-                                >
-                                  {config.circuit.qubits
-                                    .filter((qq) => qq.id !== qubit.id)
-                                    .map((qq) => (
-                                      <option key={qq.id} value={qq.id}>
-                                        {qq.id}
-                                      </option>
-                                    ))}
-                                </select>
-                              </div>
-                            )}
-
-                            <div style={styles.popupButtons}>
-                              {hasGate && (
-                                <button
-                                  style={styles.popupButton}
-                                  onClick={() => {
-                                    deleteGate(qubit.id, segment.id);
-                                    setActiveSegment(null);
-                                  }}
-                                >
-                                  Delete gate
-                                </button>
-                              )}
-                              <button
-                                style={styles.popupButton}
-                                onClick={() => {
-                                  deleteSegment(qubit.id, segment.id);
-                                  setActiveSegment(null);
-                                }}
-                              >
-                                Delete line
-                              </button>
-                              <button
-                                style={styles.popupButton}
-                                onClick={() => {
-                                  deleteRow(qubit.id);
-                                  setActiveSegment(null);
-                                }}
-                              >
-                                Delete row
-                              </button>
-                              <button
-                                style={styles.popupButton}
-                                onClick={() => setActiveSegment(null)}
-                              >
-                                Close
-                              </button>
-                            </div>
-                          </div>
-                        </foreignObject>
                       )}
 
                       {isHovered && !hasGate && (
@@ -610,6 +529,163 @@ export default function App() {
             ))}
           </g>
         </svg>
+
+        {activeInfo && popupStyle && (() => {
+          const { qubit, segment } = activeInfo;
+          const hasGate = segment.gate && segment.gate !== "none";
+
+          return (
+            <div
+              style={popupStyle}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={styles.popupRow}>
+                <span style={styles.popupLabel}>Gate</span>
+                <select
+                  style={styles.popupSelect}
+                  value={hasGate ? segment.gate : "none"}
+                  onChange={(e) => {
+                    addGate(qubit.id, segment.id, e.target.value);
+                  }}
+                >
+                  {GATE_OPTIONS.map((g) => (
+                    <option key={g} value={g}>
+                      {g === "none" ? "(none)" : g}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {segment.gate === "UF" && (
+                <>
+                  <div style={styles.popupRow}>
+                    <span style={styles.popupLabel}>f(x)</span>
+                    <select
+                      style={styles.popupSelect}
+                      value={segment.uf?.function ?? "parity"}
+                      onChange={(e) => {
+                        const nextConfig = structuredClone(config);
+                        const q = nextConfig.circuit.qubits.find((qq) => qq.id === qubit.id);
+                        const s = q?.segments.find((ss) => ss.id === segment.id);
+                        if (!s) return;
+                        s.uf =
+                          s.uf ??
+                          ({
+                            function: "parity",
+                            x_bits: nextConfig.circuit.qubits
+                              .map((qq) => qq.id)
+                              .filter((id) => id !== qubit.id)
+                          });
+                        s.uf.function = e.target.value;
+                        saveConfig(nextConfig);
+                      }}
+                    >
+                      <option value="parity">parity</option>
+                      <option value="const0">const0</option>
+                      <option value="const1">const1</option>
+                    </select>
+                  </div>
+
+                  <div style={styles.popupRow}>
+                    <span style={styles.popupLabel}>x</span>
+                    <select
+                      style={{ ...styles.popupSelect, height: 140 }}
+                      multiple
+                      value={segment.uf?.x_bits ?? []}
+                      onChange={(e) => {
+                        const selected = Array.from(e.target.selectedOptions).map((o) => o.value);
+                        const nextConfig = structuredClone(config);
+                        const q = nextConfig.circuit.qubits.find((qq) => qq.id === qubit.id);
+                        const s = q?.segments.find((ss) => ss.id === segment.id);
+                        if (!s) return;
+                        s.uf =
+                          s.uf ??
+                          ({
+                            function: "parity",
+                            x_bits: nextConfig.circuit.qubits
+                              .map((qq) => qq.id)
+                              .filter((id) => id !== qubit.id)
+                          });
+                        s.uf.x_bits = selected;
+                        saveConfig(nextConfig);
+                      }}
+                    >
+                      {config.circuit.qubits
+                        .filter((qq) => qq.id !== qubit.id)
+                        .map((qq) => (
+                          <option key={qq.id} value={qq.id}>
+                            {qq.id}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                </>
+              )}
+
+              {segment.gate === "SWAP" && (
+                <div style={styles.popupRow}>
+                  <span style={styles.popupLabel}>With</span>
+                  <select
+                    style={styles.popupSelect}
+                    value={segment.swapWith ?? ""}
+                    onChange={(e) => {
+                      const nextConfig = structuredClone(config);
+                      const q = nextConfig.circuit.qubits.find((qq) => qq.id === qubit.id);
+                      const s = q?.segments.find((ss) => ss.id === segment.id);
+                      if (!s) return;
+                      s.swapWith = e.target.value || null;
+                      saveConfig(nextConfig);
+                    }}
+                  >
+                    {config.circuit.qubits
+                      .filter((qq) => qq.id !== qubit.id)
+                      .map((qq) => (
+                        <option key={qq.id} value={qq.id}>
+                          {qq.id}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              )}
+
+              <div style={styles.popupButtons}>
+                {hasGate && (
+                  <button
+                    style={styles.popupButton}
+                    onClick={() => {
+                      deleteGate(qubit.id, segment.id);
+                      setActiveSegment(null);
+                    }}
+                  >
+                    Delete gate
+                  </button>
+                )}
+                <button
+                  style={styles.popupButton}
+                  onClick={() => {
+                    deleteSegment(qubit.id, segment.id);
+                    setActiveSegment(null);
+                  }}
+                >
+                  Delete line
+                </button>
+                <button
+                  style={styles.popupButton}
+                  onClick={() => {
+                    deleteRow(qubit.id);
+                    setActiveSegment(null);
+                  }}
+                >
+                  Delete row
+                </button>
+                <button style={styles.popupButton} onClick={() => setActiveSegment(null)}>
+                  Close
+                </button>
+              </div>
+            </div>
+          );
+        })()}
       </div>
     </div>
   );
