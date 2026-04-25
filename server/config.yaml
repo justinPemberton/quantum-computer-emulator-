@@ -26,24 +26,6 @@ circuit:
         - id: 246f974a-01e2-4a55-a61a-3efc37cad080
           gate: H
         - id: 46ff71fb-3c43-4139-a406-d8a2db2953af
-          gate: UF
-          uf:
-            function: const1
-            x_bits:
-              - q0
+          gate: X
         - id: 017acf67-8b98-4c53-9814-d5714e12e534
           gate: none
-    - id: q2
-      label: "|0>"
-      y: 340
-      segments:
-        - id: 0cb7212d-6884-4176-8559-857bdb4b5ff3
-          gate: none
-        - id: 5ae2f1bc-8423-498c-b616-51475525acec
-          gate: H
-        - id: 5cd95de0-bf82-4934-821b-c65029dd5b6f
-          gate: UF
-          uf:
-            function: const0
-            x_bits:
-              - q1
