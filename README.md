@@ -85,6 +85,15 @@ Deutsch–Jozsa (10 total qubits: inputs `q0..q8`, ancilla `q9`):
 ./c/build/bin/qsim c/examples/deutsch_jozsa_10q_parity.yaml
 ```
 
+Deutsch (2 qubits: input `q0`, ancilla `q1`):
+
+```sh
+./c/build/bin/qsim c/examples/deutsch_2q_const0.yaml
+./c/build/bin/qsim c/examples/deutsch_2q_const1.yaml
+./c/build/bin/qsim c/examples/deutsch_2q_balanced_x.yaml
+./c/build/bin/qsim c/examples/deutsch_2q_balanced_notx.yaml
+```
+
 ## Design
 
 See `DESIGN.md`.

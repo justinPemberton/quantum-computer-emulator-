@@ -30,6 +30,7 @@ const defaultConfig = {
 export default function App() {
   const [config, setConfig] = useState(defaultConfig);
   const [output, setOutput] = useState("");
+  const [djCheck, setDjCheck] = useState("");
   const [hoverSegment, setHoverSegment] = useState(null);
   const [activeSegment, setActiveSegment] = useState(null);
 
@@ -127,7 +128,14 @@ export default function App() {
       delete segment.uf;
       delete segment.swapWith;
     } else if (gateType === "UF") {
-      segment.uf = segment.uf ?? { function: "parity", x_bits: [] };
+      segment.uf =
+        segment.uf ??
+        ({
+          function: "parity",
+          x_bits: nextConfig.circuit.qubits
+            .map((q) => q.id)
+            .filter((id) => id !== qubitId)
+        });
       delete segment.matrix;
       delete segment.swapWith;
     } else if (gateType === "SWAP") {
@@ -177,12 +185,49 @@ export default function App() {
   async function runProgram() {
     const res = await fetch("/api/run", { method: "POST" });
     const data = await res.json();
-    setOutput(data.stdout || data.stderr || data.err || "");
+    const text = data.stdout || data.stderr || data.err || "";
+
+    const measurements = [];
+    for (const line of String(text).split(/\r?\n/)) {
+      const match = /^measure q(\d+)\s*=\s*([01])\b/.exec(line.trim());
+      if (!match) continue;
+      measurements.push({ qubit: Number(match[1]), value: Number(match[2]) });
+    }
+
+    if (measurements.length > 0) {
+      const ufYBits = new Set();
+      for (let qi = 0; qi < config.circuit.qubits.length; qi++) {
+        const q = config.circuit.qubits[qi];
+        const segs = Array.isArray(q?.segments) ? q.segments : [];
+        for (const seg of segs) {
+          if (String(seg?.gate || "").toUpperCase() === "UF") ufYBits.add(qi);
+        }
+      }
+
+      measurements.sort((a, b) => a.qubit - b.qubit);
+      const bits = measurements.map((m) => String(m.value)).join("");
+      setOutput(bits);
+
+      const checkBits = measurements
+        .filter((m) => !ufYBits.has(m.qubit))
+        .map((m) => String(m.value))
+        .join("");
+
+      if (checkBits.length > 0) {
+        setDjCheck(checkBits.includes("1") ? "balanced (some 1s)" : "constant (all 0s)");
+      } else {
+        setDjCheck("");
+      }
+    } else {
+      setOutput(text);
+      setDjCheck("");
+    }
   }
 
   function resetCircuit() {
     saveConfig(defaultConfig);
     setOutput("");
+    setDjCheck("");
     setView({ x: 0, y: 0, scale: 1 });
     setActiveSegment(null);
   }
@@ -253,8 +298,9 @@ export default function App() {
         <h3>YAML-backed JSON</h3>
         <pre style={styles.configBox}>{JSON.stringify(config, null, 2)}</pre>
 
-        <h3>Program Output</h3>
+        <h3>Measured Bits</h3>
         <pre style={styles.outputBox}>{output}</pre>
+        {djCheck && <p>Deutsch–Jozsa check: {djCheck}</p>}
       </div>
 
       <div

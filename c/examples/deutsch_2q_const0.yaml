@@ -1,0 +1,23 @@
+qubits: 2
+vectors:
+  - id: v0
+    operations:
+      - gate: X
+        targets: [q1]
+  - id: v1
+    operations:
+      - gate: H
+        targets: [q0, q1]
+  - id: v2
+    operations:
+      - gate: UF
+        function: const0
+        y_bit: q1
+  - id: v3
+    operations:
+      - gate: H
+        targets: [q0]
+  - id: v4
+    operations:
+      - gate: MEASURE
+        targets: [q0]
