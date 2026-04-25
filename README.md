@@ -49,6 +49,10 @@ Print every intermediate state:
 ./build/bin/qsim path/to/circuit.yaml --steps
 ```
 
+## Design
+
+See `DESIGN.md`.
+
 ## Test
 
 ```sh
