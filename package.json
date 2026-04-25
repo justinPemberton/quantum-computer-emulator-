@@ -1,15 +1,24 @@
 {
   "name": "quantum-computer-emulator",
+  "version": "1.0.0",
   "private": true,
-  "workspaces": [
-    "server",
-    "client"
-  ],
+  "type": "module",
   "scripts": {
-    "build:c": "make -C c",
-    "test:c": "make -C c test",
     "server": "node server/index.js",
-    "client": "npm --workspace client run dev"
+    "client": "vite --config client/vite.config.js",
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "build:c": "make -C c",
+    "test:c": "make -C c test"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "yaml": "^2.3.4",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.7.0",
+    "concurrently": "^8.2.0",
+    "vite": "^7.0.0"
   }
 }
-

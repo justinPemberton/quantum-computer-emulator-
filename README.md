@@ -66,21 +66,28 @@ npm install
 npm run server
 ```
 
-Or:
+Run the simulator once (prints amplitudes to stdout):
 
 ```sh
 ./server/scripts/run.sh
 ```
 
-## Client (scaffold)
+## Client (UI)
 
 ```sh
 npm install
 npm run client
 ```
 
+## Dev (server + client)
+
+```sh
+npm install
+npm run dev
+```
+
 ## Nix
 
 ```sh
-nix-shell --run "make test"
+nix-shell
 ```
