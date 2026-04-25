@@ -1,2 +1,11 @@
 build/
+c/build/
 
+node_modules/
+client/dist/
+client/.vite/
+
+*.log
+.env
+.env.*
+.DS_Store

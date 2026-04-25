@@ -1,0 +1,15 @@
+{
+  "name": "quantum-computer-emulator",
+  "private": true,
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "build:c": "make -C c",
+    "test:c": "make -C c test",
+    "server": "node server/index.js",
+    "client": "npm --workspace client run dev"
+  }
+}
+

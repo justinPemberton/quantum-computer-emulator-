@@ -1,11 +1,11 @@
-# quantum-computer-emulator (C)
+# quantum-computer-emulator
 
-Minimal state-vector simulator for small quantum circuits.
+State-vector quantum circuit simulator with a C core plus server/client scaffolding.
 
 ## Requirements
 
-- A C compiler (`gcc`/`clang`) and `make`
-- Or Nix (example below)
+- For the C core: a C compiler (`gcc`/`clang`) and `make` (or Nix)
+- For server/client: Node.js + npm (or Nix)
 
 ## Build
 
@@ -16,7 +16,7 @@ make
 ## Run (example)
 
 ```sh
-./build/bin/qsim
+./c/build/bin/qsim
 ```
 
 ## Run a YAML circuit
@@ -40,13 +40,13 @@ vectors:
 Run:
 
 ```sh
-./build/bin/qsim path/to/circuit.yaml
+./c/build/bin/qsim path/to/circuit.yaml
 ```
 
 Print every intermediate state:
 
 ```sh
-./build/bin/qsim path/to/circuit.yaml --steps
+./c/build/bin/qsim path/to/circuit.yaml --steps
 ```
 
 ## Design
@@ -59,8 +59,28 @@ See `DESIGN.md`.
 make test
 ```
 
-## Nix (optional)
+## Server (scaffold)
 
 ```sh
-nix-shell -p gcc gnumake --run "make test"
+npm install
+npm run server
+```
+
+Or:
+
+```sh
+./server/scripts/run.sh
+```
+
+## Client (scaffold)
+
+```sh
+npm install
+npm run client
+```
+
+## Nix
+
+```sh
+nix-shell --run "make test"
 ```
