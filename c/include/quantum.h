@@ -2,6 +2,9 @@
 #define QUANTUM_H
 
 #include <stddef.h>
+#include <stdint.h>
+
+#include "uf.h"
 
 typedef struct {
     double real;
@@ -35,7 +38,22 @@ int qs_apply_swap(QuantumState *state,
                   size_t control_count,
                   Complex *scratch);
 
+int qs_apply_uf(QuantumState *state,
+                UfFunction function,
+                const int *x_bits,
+                size_t x_bit_count,
+                int y_bit,
+                const int *controls,
+                size_t control_count,
+                Complex *scratch);
+
+int qs_measure(QuantumState *state,
+               int qubit,
+               uint64_t *rng_state,
+               int *out_value,
+               double *out_p0,
+               double *out_p1);
+
 double qs_norm2(const QuantumState *state);
 
 #endif
-

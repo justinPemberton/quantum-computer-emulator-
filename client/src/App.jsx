@@ -5,7 +5,7 @@ const LINE_STEP = 140;
 const ROW_GAP = 90;
 const START_X = 80;
 
-const GATE_OPTIONS = ["none", "H", "X", "Y", "Z", "S", "T", "OTHER"];
+const GATE_OPTIONS = ["none", "H", "X", "Y", "Z", "S", "T", "MEASURE", "UF", "SWAP", "OTHER"];
 
 const defaultConfig = {
   circuit: {
@@ -124,8 +124,21 @@ export default function App() {
         x3: 0,
         x4: 1
       };
+      delete segment.uf;
+      delete segment.swapWith;
+    } else if (gateType === "UF") {
+      segment.uf = segment.uf ?? { function: "parity", x_bits: [] };
+      delete segment.matrix;
+      delete segment.swapWith;
+    } else if (gateType === "SWAP") {
+      const other = nextConfig.circuit.qubits.find((q) => q.id !== qubitId);
+      segment.swapWith = other ? other.id : null;
+      delete segment.matrix;
+      delete segment.uf;
     } else {
       delete segment.matrix;
+      delete segment.uf;
+      delete segment.swapWith;
     }
 
     saveConfig(nextConfig);
@@ -294,6 +307,7 @@ export default function App() {
                   const isActive =
                     activeSegment?.qubitId === qubit.id &&
                     activeSegment?.segmentId === segment.id;
+                  const gateLabel = segment.gate === "MEASURE" ? "M" : segment.gate;
 
                   return (
                     <g
@@ -350,10 +364,10 @@ export default function App() {
                             x={gateX}
                             y={qubit.y + 7}
                             textAnchor="middle"
-                            fontSize="22"
+                            fontSize={gateLabel.length <= 2 ? 22 : 14}
                             fontWeight="bold"
                           >
-                            {segment.gate}
+                            {gateLabel}
                           </text>
                         </g>
                       )}
@@ -363,7 +377,7 @@ export default function App() {
                           x={gateX - 105}
                           y={qubit.y - BOX_SIZE / 2 - 95}
                           width={210}
-                          height={140}
+                          height={segment.gate === "UF" ? 240 : segment.gate === "SWAP" ? 180 : 140}
                         >
                           <div
                             style={styles.popup}
@@ -386,6 +400,84 @@ export default function App() {
                                 ))}
                               </select>
                             </div>
+
+                            {segment.gate === "UF" && (
+                              <>
+                                <div style={styles.popupRow}>
+                                  <span style={styles.popupLabel}>f(x)</span>
+                                  <select
+                                    style={styles.popupSelect}
+                                    value={segment.uf?.function ?? "parity"}
+                                    onChange={(e) => {
+                                      const nextConfig = structuredClone(config);
+                                      const q = nextConfig.circuit.qubits.find((qq) => qq.id === qubit.id);
+                                      const s = q?.segments.find((ss) => ss.id === segment.id);
+                                      if (!s) return;
+                                      s.uf = s.uf ?? { function: "parity", x_bits: [] };
+                                      s.uf.function = e.target.value;
+                                      saveConfig(nextConfig);
+                                    }}
+                                  >
+                                    <option value="parity">parity</option>
+                                    <option value="const0">const0</option>
+                                    <option value="const1">const1</option>
+                                  </select>
+                                </div>
+
+                                <div style={styles.popupRow}>
+                                  <span style={styles.popupLabel}>x</span>
+                                  <select
+                                    style={{ ...styles.popupSelect, height: 90 }}
+                                    multiple
+                                    value={segment.uf?.x_bits ?? []}
+                                    onChange={(e) => {
+                                      const selected = Array.from(e.target.selectedOptions).map((o) => o.value);
+                                      const nextConfig = structuredClone(config);
+                                      const q = nextConfig.circuit.qubits.find((qq) => qq.id === qubit.id);
+                                      const s = q?.segments.find((ss) => ss.id === segment.id);
+                                      if (!s) return;
+                                      s.uf = s.uf ?? { function: "parity", x_bits: [] };
+                                      s.uf.x_bits = selected;
+                                      saveConfig(nextConfig);
+                                    }}
+                                  >
+                                    {config.circuit.qubits
+                                      .filter((qq) => qq.id !== qubit.id)
+                                      .map((qq) => (
+                                        <option key={qq.id} value={qq.id}>
+                                          {qq.id}
+                                        </option>
+                                      ))}
+                                  </select>
+                                </div>
+                              </>
+                            )}
+
+                            {segment.gate === "SWAP" && (
+                              <div style={styles.popupRow}>
+                                <span style={styles.popupLabel}>With</span>
+                                <select
+                                  style={styles.popupSelect}
+                                  value={segment.swapWith ?? ""}
+                                  onChange={(e) => {
+                                    const nextConfig = structuredClone(config);
+                                    const q = nextConfig.circuit.qubits.find((qq) => qq.id === qubit.id);
+                                    const s = q?.segments.find((ss) => ss.id === segment.id);
+                                    if (!s) return;
+                                    s.swapWith = e.target.value || null;
+                                    saveConfig(nextConfig);
+                                  }}
+                                >
+                                  {config.circuit.qubits
+                                    .filter((qq) => qq.id !== qubit.id)
+                                    .map((qq) => (
+                                      <option key={qq.id} value={qq.id}>
+                                        {qq.id}
+                                      </option>
+                                    ))}
+                                </select>
+                              </div>
+                            )}
 
                             <div style={styles.popupButtons}>
                               {hasGate && (

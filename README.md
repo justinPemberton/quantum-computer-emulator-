@@ -37,6 +37,31 @@ vectors:
         targets: [q1]
 ```
 
+Supported gates:
+
+- 1-qubit: `H`, `X`, `Y`, `Z`, `S`, `T`
+- `SWAP` (2 targets)
+- `OTHER` (custom 2×2 matrix)
+- `UF` oracle: `y_bit: qN`, optional `x_bits: [...]`, `function: parity|const0|const1`
+- `MEASURE` (collapses the state and prints a readout line)
+
+Example `UF` + `MEASURE`:
+
+```yaml
+qubits: 2
+vectors:
+  - id: v0
+    operations:
+      - gate: H
+        targets: [q0]
+      - gate: UF
+        function: parity
+        x_bits: [q0]
+        y_bit: q1
+      - gate: MEASURE
+        targets: [q1]
+```
+
 Run:
 
 ```sh
@@ -48,6 +73,8 @@ Print every intermediate state:
 ```sh
 ./c/build/bin/qsim path/to/circuit.yaml --steps
 ```
+
+Measurement randomness is controlled by `QSIM_SEED` (default: `1`).
 
 ## Design
 

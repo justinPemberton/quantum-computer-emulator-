@@ -27,6 +27,8 @@ static void op_reset(CircuitOp *op)
 {
     memset(op, 0, sizeof(*op));
     op->kind = (GateKind)-1;
+    op->uf.function = UF_PARITY;
+    op->uf.y_bit = -1;
 }
 
 static void op_free(CircuitOp *op)
@@ -34,6 +36,7 @@ static void op_free(CircuitOp *op)
     if (!op) return;
     free(op->targets);
     free(op->controls);
+    free(op->uf.x_bits);
     op_reset(op);
 }
 
@@ -82,16 +85,24 @@ static int push_current_op(Parser *p, int line_no, char **out_error)
         if (out_error) *out_error = dup_printf("line %d: operation missing gate", line_no);
         return -1;
     }
-    if (op->kind != GATE_SWAP && op->target_count == 0) {
-        if (out_error) *out_error = dup_printf("line %d: operation missing targets", line_no);
-        return -1;
-    }
     if (op->kind == GATE_SWAP && op->target_count != 2) {
         if (out_error) *out_error = dup_printf("line %d: SWAP requires exactly 2 targets", line_no);
         return -1;
     }
     if (op->kind == GATE_OTHER && !p->current_matrix_values_parsed) {
         if (out_error) *out_error = dup_printf("line %d: OTHER gate missing matrix values", line_no);
+        return -1;
+    }
+    if (op->kind == GATE_UF) {
+        if (op->uf.y_bit < 0 && op->target_count == 1) {
+            op->uf.y_bit = op->targets[0];
+        }
+        if (op->uf.y_bit < 0) {
+            if (out_error) *out_error = dup_printf("line %d: UF missing y_bit", line_no);
+            return -1;
+        }
+    } else if (op->kind != GATE_SWAP && op->target_count == 0) {
+        if (out_error) *out_error = dup_printf("line %d: operation missing targets", line_no);
         return -1;
     }
 
@@ -159,6 +170,35 @@ static bool split_key_value(char *s, char **out_key, char **out_val)
     if (out_key) *out_key = key;
     if (out_val) *out_val = val;
     return true;
+}
+
+static bool streq_ci(const char *a, const char *b)
+{
+    if (!a || !b) return false;
+    while (*a && *b) {
+        unsigned char ca = (unsigned char)*a++;
+        unsigned char cb = (unsigned char)*b++;
+        if (tolower(ca) != tolower(cb)) return false;
+    }
+    return *a == '\0' && *b == '\0';
+}
+
+static int uf_function_from_name(const char *name, UfFunction *out_func)
+{
+    if (!name || !out_func) return -1;
+    if (streq_ci(name, "parity") || streq_ci(name, "xor")) {
+        *out_func = UF_PARITY;
+        return 0;
+    }
+    if (streq_ci(name, "const0") || streq_ci(name, "zero") || streq_ci(name, "constant0")) {
+        *out_func = UF_CONST0;
+        return 0;
+    }
+    if (streq_ci(name, "const1") || streq_ci(name, "one") || streq_ci(name, "constant1")) {
+        *out_func = UF_CONST1;
+        return 0;
+    }
+    return -1;
 }
 
 static int parse_int_scalar(const char *s, int *out_value)
@@ -499,6 +539,24 @@ static int validate_indices(const Circuit *circuit, char **out_error)
                 return -1;
             }
         }
+
+        if (op->kind == GATE_UF) {
+            if (op->uf.y_bit < 0 || op->uf.y_bit >= circuit->qubit_count) {
+                if (out_error) *out_error = strdup("UF y_bit out of range");
+                return -1;
+            }
+            for (size_t xb = 0; xb < op->uf.x_bit_count; xb++) {
+                int q = op->uf.x_bits[xb];
+                if (q < 0 || q >= circuit->qubit_count) {
+                    if (out_error) *out_error = strdup("UF x_bits out of range");
+                    return -1;
+                }
+                if (q == op->uf.y_bit) {
+                    if (out_error) *out_error = strdup("UF x_bits must not include y_bit");
+                    return -1;
+                }
+            }
+        }
     }
     return 0;
 }
@@ -658,6 +716,34 @@ int circuit_load_yaml_file(const char *path, Circuit *out_circuit, char **out_er
                 free(kv);
                 break;
             }
+        } else if (strcmp(key, "function") == 0) {
+            UfFunction func;
+            if (uf_function_from_name(val, &func) != 0) {
+                rc = -1;
+                if (out_error) *out_error = dup_printf2("line %d: unknown UF function '%s'", line_no, val);
+                free(kv);
+                break;
+            }
+            parser.current_op.uf.function = func;
+        } else if (strcmp(key, "x_bits") == 0) {
+            free(parser.current_op.uf.x_bits);
+            parser.current_op.uf.x_bits = NULL;
+            parser.current_op.uf.x_bit_count = 0;
+            if (parse_qubit_list(val, &parser.current_op.uf.x_bits, &parser.current_op.uf.x_bit_count) != 0) {
+                rc = -1;
+                if (out_error) *out_error = dup_printf("line %d: invalid x_bits list", line_no);
+                free(kv);
+                break;
+            }
+        } else if (strcmp(key, "y_bit") == 0) {
+            int y = 0;
+            if (parse_qubit_token(val, &y) != 0) {
+                rc = -1;
+                if (out_error) *out_error = dup_printf("line %d: invalid y_bit", line_no);
+                free(kv);
+                break;
+            }
+            parser.current_op.uf.y_bit = y;
         } else if (strcmp(key, "matrix") == 0) {
             parser.in_matrix = true;
             parser.matrix_indent = indent;
@@ -723,7 +809,7 @@ size_t circuit_step_count(const Circuit *circuit)
     size_t steps = 0;
     for (size_t i = 0; i < circuit->op_count; i++) {
         const CircuitOp *op = &circuit->ops[i];
-        if (op->kind == GATE_SWAP) {
+        if (op->kind == GATE_SWAP || op->kind == GATE_UF) {
             steps += 1;
         } else {
             steps += op->target_count;

@@ -34,6 +34,12 @@ function buildCircuitYaml(configObj) {
     throw new Error("config is missing circuit.qubits[]");
   }
 
+  const idToIndex = new Map();
+  for (let i = 0; i < qubits.length; i++) {
+    const id = qubits[i]?.id;
+    if (typeof id === "string" && id) idToIndex.set(id, i);
+  }
+
   let maxSegments = 0;
   for (const q of qubits) {
     const segs = Array.isArray(q?.segments) ? q.segments : [];
@@ -45,6 +51,7 @@ function buildCircuitYaml(configObj) {
   out += "vectors:\n";
 
   let vectorIndex = 0;
+  const seenSwaps = new Set();
   for (let col = 0; col < maxSegments; col++) {
     const ops = [];
 
@@ -56,6 +63,58 @@ function buildCircuitYaml(configObj) {
 
       if (["H", "X", "Y", "Z", "S", "T"].includes(gate)) {
         ops.push({ gate, target: qi });
+        continue;
+      }
+
+      if (gate === "MEASURE") {
+        ops.push({ gate, target: qi });
+        continue;
+      }
+
+      if (gate === "UF") {
+        const uf = seg?.uf ?? {};
+        const funcRaw = uf?.function ?? "parity";
+        const func = String(funcRaw).trim().toLowerCase();
+        if (!["parity", "const0", "const1"].includes(func)) {
+          throw new Error(`UF gate has invalid function '${String(funcRaw)}' at qubit ${qi}, segment ${col}`);
+        }
+
+        const xbRaw = Array.isArray(uf?.x_bits) ? uf.x_bits : [];
+        const xIndices = [];
+        for (const bit of xbRaw) {
+          const id = String(bit);
+          const idx = idToIndex.get(id);
+          if (idx == null) {
+            throw new Error(`UF x_bits contains unknown qubit '${id}' at qubit ${qi}, segment ${col}`);
+          }
+          if (idx === qi) continue;
+          xIndices.push(idx);
+        }
+
+        ops.push({ gate, function: func, xBits: xIndices, yBit: qi });
+        continue;
+      }
+
+      if (gate === "SWAP") {
+        const withId = seg?.swapWith;
+        if (!withId) {
+          throw new Error(`SWAP gate missing swapWith at qubit ${qi}, segment ${col}`);
+        }
+        const other = idToIndex.get(String(withId));
+        if (other == null) {
+          throw new Error(`SWAP swapWith unknown qubit '${String(withId)}' at qubit ${qi}, segment ${col}`);
+        }
+        if (other === qi) {
+          throw new Error(`SWAP swapWith cannot be itself at qubit ${qi}, segment ${col}`);
+        }
+
+        const a = Math.min(qi, other);
+        const b = Math.max(qi, other);
+        const key = `${col}:${a}-${b}`;
+        if (seenSwaps.has(key)) continue;
+        seenSwaps.add(key);
+
+        ops.push({ gate, targets: [a, b] });
         continue;
       }
 
@@ -77,7 +136,16 @@ function buildCircuitYaml(configObj) {
 
     for (const op of ops) {
       out += `      - gate: ${op.gate}\n`;
-      out += `        targets: [q${op.target}]\n`;
+      if (op.gate === "UF") {
+        out += `        function: ${op.function}\n`;
+        if (op.xBits.length > 0) {
+          out += `        x_bits: [${op.xBits.map((i) => `q${i}`).join(", ")}]\n`;
+        }
+        out += `        y_bit: q${op.yBit}\n`;
+      } else {
+        const targets = op.targets ?? [op.target];
+        out += `        targets: [${targets.map((i) => `q${i}`).join(", ")}]\n`;
+      }
       if (op.gate === "OTHER") {
         out += "        matrix:\n";
         out += `          values: ${op.matrix}\n`;

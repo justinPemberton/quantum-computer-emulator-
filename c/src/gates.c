@@ -63,6 +63,8 @@ const Matrix2 *gate_standard_matrix(GateKind kind)
             return &S_MATRIX;
         case GATE_T:
             return &T_MATRIX;
+        case GATE_MEASURE:
+        case GATE_UF:
         case GATE_OTHER:
         case GATE_SWAP:
         default:
@@ -85,6 +87,10 @@ const char *gate_kind_name(GateKind kind)
             return "S";
         case GATE_T:
             return "T";
+        case GATE_MEASURE:
+            return "MEASURE";
+        case GATE_UF:
+            return "UF";
         case GATE_OTHER:
             return "OTHER";
         case GATE_SWAP:
@@ -133,6 +139,14 @@ int gate_kind_from_name(const char *name, GateKind *out_kind)
         *out_kind = GATE_T;
         return 0;
     }
+    if (streq_ci(name, "MEASURE") || streq_ci(name, "MEAS") || streq_ci(name, "M")) {
+        *out_kind = GATE_MEASURE;
+        return 0;
+    }
+    if (streq_ci(name, "UF") || streq_ci(name, "ORACLE")) {
+        *out_kind = GATE_UF;
+        return 0;
+    }
     if (streq_ci(name, "SWAP")) {
         *out_kind = GATE_SWAP;
         return 0;
@@ -144,4 +158,3 @@ int gate_kind_from_name(const char *name, GateKind *out_kind)
 
     return -1;
 }
-

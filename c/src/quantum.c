@@ -220,6 +220,158 @@ int qs_apply_swap(QuantumState *state,
     return 0;
 }
 
+int qs_apply_uf(QuantumState *state,
+                UfFunction function,
+                const int *x_bits,
+                size_t x_bit_count,
+                int y_bit,
+                const int *controls,
+                size_t control_count,
+                Complex *scratch)
+{
+    if (!state || !state->data) return -1;
+    if (!is_valid_qubit_index(state, y_bit)) return -1;
+    if (x_bit_count > 0 && !x_bits) return -1;
+    if (control_count > 0 && !controls) return -1;
+
+    size_t x_mask = 0;
+    for (size_t i = 0; i < x_bit_count; i++) {
+        int q = x_bits[i];
+        if (!is_valid_qubit_index(state, q)) return -1;
+        if (q == y_bit) return -1;
+        x_mask |= (size_t)1U << (unsigned)q;
+    }
+
+    size_t control_mask = 0;
+    if (build_control_mask(state, controls, control_count, y_bit, -1, &control_mask) != 0) return -1;
+
+    size_t n = state->size;
+
+    bool should_free = false;
+    Complex *old = scratch;
+    if (!old) {
+        old = malloc(n * sizeof(Complex));
+        if (!old) return -1;
+        should_free = true;
+    }
+    memcpy(old, state->data, n * sizeof(Complex));
+
+    size_t y_mask = (size_t)1ULL << (unsigned)y_bit;
+
+    for (size_t i = 0; i < n; i++) {
+        if ((i & y_mask) != 0) continue;
+        if ((i & control_mask) != control_mask) continue;
+
+        int fx = 0;
+        switch (function) {
+            case UF_PARITY:
+                fx = (__builtin_popcountll((unsigned long long)(i & x_mask)) & 1U) != 0;
+                break;
+            case UF_CONST0:
+                fx = 0;
+                break;
+            case UF_CONST1:
+                fx = 1;
+                break;
+            default:
+                if (should_free) free(old);
+                return -1;
+        }
+
+        if (!fx) continue;
+
+        size_t j = i | y_mask;
+        state->data[i] = old[j];
+        state->data[j] = old[i];
+    }
+
+    if (should_free) free(old);
+    return 0;
+}
+
+static inline uint64_t rng_next_u64(uint64_t *state)
+{
+    uint64_t x = *state;
+    if (x == 0) x = UINT64_C(0x9e3779b97f4a7c15);
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    *state = x;
+    return x * UINT64_C(0x2545F4914F6CDD1D);
+}
+
+static inline double rng_uniform_01(uint64_t *state)
+{
+    uint64_t x = rng_next_u64(state);
+    return (double)(x >> 11) * (1.0 / 9007199254740992.0);  // 2^53
+}
+
+int qs_measure(QuantumState *state,
+               int qubit,
+               uint64_t *rng_state,
+               int *out_value,
+               double *out_p0,
+               double *out_p1)
+{
+    if (!state || !state->data) return -1;
+    if (!is_valid_qubit_index(state, qubit)) return -1;
+
+    size_t mask = (size_t)1ULL << (unsigned)qubit;
+
+    double p0 = 0.0;
+    double p1 = 0.0;
+    for (size_t i = 0; i < state->size; i++) {
+        double re = state->data[i].real;
+        double im = state->data[i].imag;
+        double amp2 = re * re + im * im;
+        if ((i & mask) != 0) {
+            p1 += amp2;
+        } else {
+            p0 += amp2;
+        }
+    }
+
+    double norm = p0 + p1;
+    if (norm <= 0.0) return -1;
+
+    double p0n = p0 / norm;
+    double p1n = p1 / norm;
+
+    if (out_p0) *out_p0 = p0n;
+    if (out_p1) *out_p1 = p1n;
+
+    int value = 0;
+    if (p0 <= 0.0) {
+        value = 1;
+    } else if (p1 <= 0.0) {
+        value = 0;
+    } else if (!rng_state) {
+        value = (p1 > p0) ? 1 : 0;
+    } else {
+        double r = rng_uniform_01(rng_state);
+        value = (r < p0n) ? 0 : 1;
+    }
+
+    if (out_value) *out_value = value;
+
+    double keep = value ? p1 : p0;
+    if (keep <= 0.0) return -1;
+    double inv = 1.0 / sqrt(keep);
+
+    for (size_t i = 0; i < state->size; i++) {
+        int bit = ((i & mask) != 0);
+        if (bit != value) {
+            state->data[i].real = 0.0;
+            state->data[i].imag = 0.0;
+        } else {
+            state->data[i].real *= inv;
+            state->data[i].imag *= inv;
+        }
+    }
+
+    return 0;
+}
+
 double qs_norm2(const QuantumState *state)
 {
     if (!state || !state->data) return 0.0;
@@ -232,4 +384,3 @@ double qs_norm2(const QuantumState *state)
     }
     return acc;
 }
-

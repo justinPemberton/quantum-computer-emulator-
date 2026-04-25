@@ -5,6 +5,7 @@
 
 #include "gates.h"
 #include "quantum.h"
+#include "uf.h"
 
 typedef struct {
     GateKind kind;
@@ -15,6 +16,13 @@ typedef struct {
 
     int *controls;
     size_t control_count;
+
+    struct {
+        UfFunction function;
+        int *x_bits;
+        size_t x_bit_count;
+        int y_bit;
+    } uf;
 } CircuitOp;
 
 typedef struct {
@@ -29,4 +37,3 @@ void circuit_free(Circuit *circuit);
 size_t circuit_step_count(const Circuit *circuit);
 
 #endif
-

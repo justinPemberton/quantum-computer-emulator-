@@ -11,8 +11,24 @@ typedef struct {
     size_t count;
 } StateHistory;
 
-int sim_run(const Circuit *circuit, QuantumState *state, Complex *scratch, StateHistory *history);
+typedef struct {
+    int qubit;
+    int value;
+    double p0;
+    double p1;
+} MeasurementEvent;
+
+typedef struct {
+    MeasurementEvent *events;
+    size_t count;
+} MeasurementHistory;
+
+int sim_run(const Circuit *circuit,
+            QuantumState *state,
+            Complex *scratch,
+            StateHistory *history,
+            MeasurementHistory *measurements);
 void sim_history_free(StateHistory *history);
+void sim_measurements_free(MeasurementHistory *measurements);
 
 #endif
-
