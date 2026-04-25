@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import YAML from "yaml";
 
 const BOX_SIZE = 50;
 const LINE_STEP = 140;
@@ -50,6 +51,19 @@ function matrixFlow({ x1, x2, x3, x4 }) {
   const c = mustNumber(x3, "matrix.x3");
   const d = mustNumber(x4, "matrix.x4");
   return `[[{real:${a}, imag:0}, {real:${b}, imag:0}], [{real:${c}, imag:0}, {real:${d}, imag:0}]]`;
+}
+
+function parseQubitIndex(value) {
+  if (typeof value === "number" && Number.isInteger(value)) return value;
+  const s = String(value ?? "").trim();
+  const m = /^q?(\d+)$/i.exec(s);
+  if (!m) throw new Error(`invalid qubit token '${String(value)}'`);
+  return Number(m[1]);
+}
+
+function uuid() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return String(Math.random()).slice(2);
 }
 
 function buildQsimYaml(configObj) {
@@ -186,14 +200,156 @@ function buildQsimYaml(configObj) {
   return out;
 }
 
+function buildUiConfigFromCircuitYamlText(yamlText) {
+  const obj = YAML.parse(String(yamlText ?? ""));
+
+  const qubitCountRaw = obj?.qubits ?? obj?.qubit_count;
+  const qubitCount = mustNumber(qubitCountRaw, "qubits");
+  if (!Number.isInteger(qubitCount) || qubitCount < 1 || qubitCount > 64) {
+    throw new Error(`invalid qubit count: ${String(qubitCountRaw)}`);
+  }
+
+  const vectorsRaw = Array.isArray(obj?.vectors) ? obj.vectors : [];
+  const vectorCount = Math.max(1, vectorsRaw.length);
+
+  const config = {
+    circuit: {
+      description: "Imported from circuit YAML",
+      qubits: []
+    }
+  };
+
+  for (let i = 0; i < qubitCount; i++) {
+    const segments = [];
+    for (let col = 0; col < vectorCount; col++) {
+      segments.push({ id: uuid(), gate: "none" });
+    }
+    config.circuit.qubits.push({
+      id: `q${i}`,
+      label: "|0>",
+      y: 160 + i * ROW_GAP,
+      segments
+    });
+  }
+
+  const idToIndex = new Map();
+  for (let i = 0; i < config.circuit.qubits.length; i++) idToIndex.set(config.circuit.qubits[i].id, i);
+
+  function ensureEmpty(col, row, ctx) {
+    const seg = config.circuit.qubits[row].segments[col];
+    if (seg.gate && seg.gate !== "none") {
+      throw new Error(`cannot import: multiple ops on q${row} in vector ${col} (${ctx})`);
+    }
+    return seg;
+  }
+
+  for (let col = 0; col < vectorsRaw.length; col++) {
+    const v = vectorsRaw[col];
+    const operations = Array.isArray(v?.operations) ? v.operations : [];
+
+    for (const op of operations) {
+      const gate = normalizeGate(op?.gate);
+      if (!gate) continue;
+
+      if (gate === "UF") {
+        const func = String(op?.function ?? "parity").trim().toLowerCase();
+        if (!["parity", "const0", "const1"].includes(func)) {
+          throw new Error(`invalid UF function '${String(op?.function)}' in vector ${col}`);
+        }
+
+        const yBit = parseQubitIndex(op?.y_bit ?? (Array.isArray(op?.targets) ? op.targets[0] : op?.targets));
+        if (yBit < 0 || yBit >= qubitCount) throw new Error(`UF y_bit out of range in vector ${col}`);
+
+        const xbRaw = Array.isArray(op?.x_bits) ? op.x_bits : [];
+        const xb = [];
+        for (const x of xbRaw) {
+          const idx = parseQubitIndex(x);
+          if (idx < 0 || idx >= qubitCount) throw new Error(`UF x_bits out of range in vector ${col}`);
+          if (idx === yBit) continue;
+          xb.push(`q${idx}`);
+        }
+
+        const seg = ensureEmpty(col, yBit, "UF");
+        seg.gate = "UF";
+        seg.uf = { function: func, x_bits: xb };
+        continue;
+      }
+
+      const targetsRaw = op?.targets;
+      const targetList = Array.isArray(targetsRaw) ? targetsRaw : targetsRaw != null ? [targetsRaw] : [];
+      const targets = targetList.map(parseQubitIndex);
+
+      if (gate === "SWAP") {
+        if (targets.length !== 2) throw new Error(`SWAP must have exactly 2 targets in vector ${col}`);
+        const a = targets[0];
+        const b = targets[1];
+        if (a < 0 || a >= qubitCount || b < 0 || b >= qubitCount) {
+          throw new Error(`SWAP target out of range in vector ${col}`);
+        }
+        const min = Math.min(a, b);
+        const max = Math.max(a, b);
+        ensureEmpty(col, min, "SWAP");
+        ensureEmpty(col, max, "SWAP");
+        const seg = config.circuit.qubits[min].segments[col];
+        seg.gate = "SWAP";
+        seg.swapWith = `q${max}`;
+        continue;
+      }
+
+      if (gate === "OTHER") {
+        if (targets.length !== 1) throw new Error(`OTHER must have 1 target in vector ${col}`);
+        const t = targets[0];
+        if (t < 0 || t >= qubitCount) throw new Error(`OTHER target out of range in vector ${col}`);
+
+        const values = op?.matrix?.values ?? op?.values;
+        if (!Array.isArray(values) || values.length !== 2) throw new Error(`OTHER missing 2x2 values in vector ${col}`);
+        if (!Array.isArray(values[0]) || !Array.isArray(values[1])) throw new Error(`OTHER invalid values in vector ${col}`);
+
+        function entry(r, c) {
+          const cell = values?.[r]?.[c] ?? {};
+          const re = mustNumber(cell.real ?? 0, `OTHER.values[${r}][${c}].real`);
+          const im = mustNumber(cell.imag ?? 0, `OTHER.values[${r}][${c}].imag`);
+          if (im !== 0) throw new Error("OTHER import only supports imag: 0");
+          return re;
+        }
+
+        const seg = ensureEmpty(col, t, "OTHER");
+        seg.gate = "OTHER";
+        seg.matrix = {
+          x1: entry(0, 0),
+          x2: entry(0, 1),
+          x3: entry(1, 0),
+          x4: entry(1, 1)
+        };
+        continue;
+      }
+
+      if (targets.length === 0) throw new Error(`gate ${gate} missing targets in vector ${col}`);
+
+      for (const t of targets) {
+        if (t < 0 || t >= qubitCount) throw new Error(`target out of range in vector ${col}`);
+        const seg = ensureEmpty(col, t, gate);
+        seg.gate = gate;
+        delete seg.matrix;
+        delete seg.uf;
+        delete seg.swapWith;
+      }
+    }
+  }
+
+  return config;
+}
+
 export default function App() {
   const [config, setConfig] = useState(defaultConfig);
   const [output, setOutput] = useState("");
-  const [djCheck, setDjCheck] = useState("");
   const [hoverSegment, setHoverSegment] = useState(null);
   const [activeSegment, setActiveSegment] = useState(null);
   const canvasRef = useRef(null);
   const [canvasRect, setCanvasRect] = useState(null);
+  const [yamlImportOpen, setYamlImportOpen] = useState(false);
+  const [yamlImportText, setYamlImportText] = useState("");
+  const [yamlImportError, setYamlImportError] = useState("");
 
   const [view, setView] = useState({ x: 0, y: 0, scale: 1 });
   const [dragging, setDragging] = useState(false);
@@ -371,39 +527,17 @@ export default function App() {
     }
 
     if (measurements.length > 0) {
-      const ufYBits = new Set();
-      for (let qi = 0; qi < config.circuit.qubits.length; qi++) {
-        const q = config.circuit.qubits[qi];
-        const segs = Array.isArray(q?.segments) ? q.segments : [];
-        for (const seg of segs) {
-          if (String(seg?.gate || "").toUpperCase() === "UF") ufYBits.add(qi);
-        }
-      }
-
       measurements.sort((a, b) => a.qubit - b.qubit);
       const bits = measurements.map((m) => String(m.value)).join("");
       setOutput(bits);
-
-      const checkBits = measurements
-        .filter((m) => !ufYBits.has(m.qubit))
-        .map((m) => String(m.value))
-        .join("");
-
-      if (checkBits.length > 0) {
-        setDjCheck(checkBits.includes("1") ? "balanced (some 1s)" : "constant (all 0s)");
-      } else {
-        setDjCheck("");
-      }
     } else {
       setOutput(text);
-      setDjCheck("");
     }
   }
 
   function resetCircuit() {
     saveConfig(defaultConfig);
     setOutput("");
-    setDjCheck("");
     setView({ x: 0, y: 0, scale: 1 });
     setActiveSegment(null);
   }
@@ -515,6 +649,24 @@ export default function App() {
     }
   }, [config]);
 
+  function openYamlImport() {
+    setYamlImportError("");
+    setYamlImportText(qsimYamlPreview);
+    setYamlImportOpen(true);
+  }
+
+  function applyYamlImport() {
+    try {
+      const next = buildUiConfigFromCircuitYamlText(yamlImportText);
+      saveConfig(next);
+      setYamlImportOpen(false);
+      setYamlImportError("");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setYamlImportError(msg);
+    }
+  }
+
   return (
     <div style={styles.page}>
       <div style={styles.sidebar}>
@@ -530,6 +682,9 @@ export default function App() {
         <p>Zoom: {Math.round(view.scale * 100)}%</p>
 
         <h3>Circuit YAML (generated)</h3>
+        <button onClick={openYamlImport} style={{ marginBottom: 8 }}>
+          Import Circuit YAML
+        </button>
         <pre style={styles.configBox}>{qsimYamlPreview}</pre>
 
         <details style={{ marginTop: 12 }}>
@@ -539,7 +694,6 @@ export default function App() {
 
         <h3>Measured Bits</h3>
         <pre style={styles.outputBox}>{output}</pre>
-        {djCheck && <p>Deutsch–Jozsa check: {djCheck}</p>}
       </div>
 
       <div
@@ -859,6 +1013,32 @@ export default function App() {
             </div>
           );
         })()}
+
+        {yamlImportOpen && (
+          <div
+            style={styles.modalOverlay}
+            onMouseDown={() => setYamlImportOpen(false)}
+          >
+            <div
+              style={styles.modal}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 style={{ marginTop: 0 }}>Import Circuit YAML</h3>
+              <textarea
+                style={styles.modalTextarea}
+                value={yamlImportText}
+                onChange={(e) => setYamlImportText(e.target.value)}
+                spellCheck={false}
+              />
+              {yamlImportError && <pre style={styles.modalError}>{yamlImportError}</pre>}
+              <div style={styles.modalButtons}>
+                <button onClick={applyYamlImport}>Import</button>
+                <button onClick={() => setYamlImportOpen(false)}>Cancel</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -943,5 +1123,47 @@ const styles = {
   popupButton: {
     height: "28px",
     cursor: "pointer"
+  },
+  modalOverlay: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(0,0,0,0.35)",
+    zIndex: 20000,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "16px"
+  },
+  modal: {
+    width: "min(900px, 95vw)",
+    background: "white",
+    borderRadius: "12px",
+    border: "2px solid #111",
+    boxShadow: "0 20px 60px rgba(0,0,0,0.35)",
+    padding: "16px"
+  },
+  modalTextarea: {
+    width: "100%",
+    height: "50vh",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+    fontSize: "12px",
+    padding: "10px",
+    borderRadius: "8px",
+    border: "1px solid #ccc",
+    resize: "vertical"
+  },
+  modalError: {
+    background: "#2b0000",
+    color: "#ffd6d6",
+    padding: "10px",
+    borderRadius: "8px",
+    overflow: "auto",
+    maxHeight: "140px"
+  },
+  modalButtons: {
+    marginTop: "10px",
+    display: "flex",
+    gap: "10px",
+    justifyContent: "flex-end"
   }
 };
