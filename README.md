@@ -76,6 +76,15 @@ Print every intermediate state:
 
 Measurement randomness is controlled by `QSIM_SEED` (default: `1`).
 
+## Examples
+
+Deutsch–Jozsa (10 total qubits: inputs `q0..q8`, ancilla `q9`):
+
+```sh
+./c/build/bin/qsim c/examples/deutsch_jozsa_10q_const0.yaml
+./c/build/bin/qsim c/examples/deutsch_jozsa_10q_parity.yaml
+```
+
 ## Design
 
 See `DESIGN.md`.

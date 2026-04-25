@@ -1,0 +1,24 @@
+qubits: 10
+vectors:
+  - id: v0
+    operations:
+      - gate: X
+        targets: [q9]
+  - id: v1
+    operations:
+      - gate: H
+        targets: [q0, q1, q2, q3, q4, q5, q6, q7, q8, q9]
+  - id: v2
+    operations:
+      - gate: UF
+        function: parity
+        x_bits: [q0, q1, q2, q3, q4, q5, q6, q7, q8]
+        y_bit: q9
+  - id: v3
+    operations:
+      - gate: H
+        targets: [q0, q1, q2, q3, q4, q5, q6, q7, q8]
+  - id: v4
+    operations:
+      - gate: MEASURE
+        targets: [q0, q1, q2, q3, q4, q5, q6, q7, q8]
