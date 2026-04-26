@@ -4,364 +4,315 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Quantum Computation &amp; Quantum Circuits • Educational Documentation</title>
-    <style>
-        :root {
-            --primary: #00e5ff;
-            --bg: #0a1128;
-            --card: #13234a;
-            --text: #e0f4ff;
-            --accent: #00b8d4;
-        }
-        
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-            background: var(--bg);
-            color: var(--text);
-            line-height: 1.6;
-        }
-        
-        header {
-            background: linear-gradient(90deg, #0a1128, #1a2a5c);
-            border-bottom: 3px solid var(--primary);
-            position: sticky;
-            top: 0;
-            z-index: 100;
-            box-shadow: 0 4px 12px rgba(0, 229, 255, 0.2);
-        }
-        
-        .header-content {
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 1.5rem 2rem;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-        
-        .logo {
-            font-size: 1.8rem;
-            font-weight: 700;
-            color: var(--primary);
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-        
-        .logo::before {
-            content: "⚛️";
-            font-size: 2rem;
-        }
-        
-        nav ul {
-            display: flex;
-            gap: 2rem;
-            list-style: none;
-        }
-        
-        nav a {
-            color: var(--text);
-            text-decoration: none;
-            font-weight: 500;
-            transition: color 0.3s;
-        }
-        
-        nav a:hover {
-            color: var(--primary);
-        }
-        
+<style>
+    :root {
+        /* Main App Theme Colors */
+        --bg: #f8f9fa;
+        --sidebar: #f4f4f4;
+        --card: #ffffff;
+        --text: #212529;
+        --accent: #4c6fff;      /* Primary blue from the React app */
+        --primary: #4c6fff;
+        --border: #ddd;
+        --header: #f4f4f4;
+        --shadow: rgba(0, 0, 0, 0.1);
+    }
+
+    * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+    }
+
+    body {
+        font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.6;
+    }
+
+    header {
+        background: var(--header);
+        border-bottom: 2px solid var(--border);
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        box-shadow: 0 2px 8px var(--shadow);
+    }
+
+    .header-content {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 1rem 2rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+
+    .logo {
+        font-size: 1.8rem;
+        font-weight: 700;
+        color: var(--primary);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }  
+
+    nav ul {
+        display: flex;
+        gap: 2rem;
+        list-style: none;
+    }
+
+    nav a {
+        color: var(--text);
+        text-decoration: none;
+        font-weight: 500;
+        transition: color 0.3s;
+    }
+
+    nav a:hover {
+        color: var(--primary);
+    }
+
+    .container {
+        max-width: 1400px;
+        margin: 0 auto;
+        display: flex;
+        min-height: calc(100vh - 70px);
+    }
+
+    /* Sidebar */
+    .sidebar {
+        width: 280px;
+        background: var(--sidebar);
+        padding: 2rem 1.5rem;
+        border-right: 2px solid var(--border);
+        position: sticky;
+        top: 70px;
+        height: calc(100vh - 70px);
+        overflow-y: auto;
+    }
+
+    .sidebar h2 {
+        color: var(--primary);
+        margin-bottom: 1.5rem;
+        font-size: 1.3rem;
+        padding-bottom: 0.8rem;
+        border-bottom: 2px solid var(--border);
+    }
+
+    .toc {
+        list-style: none;
+    }
+
+    .toc a {
+        color: var(--text);
+        text-decoration: none;
+        display: block;
+        padding: 0.5rem 1rem;
+        border-radius: 6px;
+        transition: all 0.3s;
+    }
+
+    .toc a:hover,
+    .toc a.active {
+        background: rgba(76, 111, 255, 0.1);
+        color: var(--primary);
+        padding-left: 1.5rem;
+    }
+
+    /* Main Content */
+    .main-content {
+        flex: 1;
+        padding: 2.5rem 3rem;
+        max-width: 1100px;
+    }
+
+    h1 {
+        font-size: 2.8rem;
+        margin-bottom: 1rem;
+        color: #212529;
+    }
+
+    h2 {
+        font-size: 2rem;
+        color: var(--primary);
+        margin-bottom: 1.2rem;
+        padding-bottom: 0.6rem;
+        border-bottom: 2px solid var(--border);
+    }
+
+    h3 {
+        font-size: 1.4rem;
+        color: #2c3e50;
+        margin: 2rem 0 1rem;
+    }
+
+    p, li {
+        font-size: 1.1rem;
+        margin-bottom: 1rem;
+    }
+
+    .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 2rem;
+        margin: 1.5rem 0;
+        box-shadow: 0 4px 12px var(--shadow);
+    }
+
+    /* Matrix Styling - Light Theme */
+    .matrix {
+        width: 100%;
+        max-width: 420px;
+        border-collapse: collapse;
+        margin: 1rem 0;
+        background: #f8f9fa;
+        border: 2px solid var(--accent);
+        border-radius: 8px;
+        overflow: hidden;
+    }
+
+    .matrix td {
+        padding: 12px 16px;
+        text-align: center;
+        border: 1px solid #ddd;
+        font-family: 'Courier New', monospace;
+        color: #212529;
+    }
+
+    .matrix tr:first-child td {
+        background: #e9ecef;
+        color: var(--primary);
+        font-weight: 600;
+        border-bottom: 2px solid var(--accent);
+    }
+
+    .math-box {
+        background: #f8f9fa;
+        padding: 1rem;
+        border-radius: 8px;
+        margin: 1rem 0;
+        border-left: 5px solid var(--accent);
+        font-family: 'Courier New', monospace;
+    }
+
+    /* Interactive Lab */
+    .interactive-lab {
+        background: var(--card);
+        border: 2px solid var(--accent);
+        border-radius: 12px;
+        padding: 2rem;
+        margin: 2.5rem 0;
+        box-shadow: 0 4px 12px var(--shadow);
+    }
+
+    canvas {
+        background: #ffffff;
+        border-radius: 12px;
+        border: 2px solid #ccc;
+    }
+
+    .gate-palette {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+    }
+
+    .gate-btn {
+        background: white;
+        color: #212529;
+        border: 2px solid var(--accent);
+        padding: 12px 8px;
+        border-radius: 8px;
+        text-align: center;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+
+    .gate-btn:hover {
+        background: var(--accent);
+        color: white;
+        transform: translateY(-2px);
+    }
+
+    .circuit-timeline {
+        background: #f8f9fa;
+        padding: 1rem;
+        border-radius: 8px;
+        min-height: 80px;
+        border: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+    }
+
+    .timeline-gate {
+        background: #e9ecef;
+        color: var(--primary);
+        padding: 8px 16px;
+        border-radius: 50px;
+        font-size: 0.9rem;
+        font-weight: bold;
+    }
+
+    button.primary {
+        background: var(--primary);
+        color: white;
+        border: none;
+        padding: 14px 28px;
+        font-size: 1.1rem;
+        font-weight: 700;
+        border-radius: 50px;
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+
+    button.primary:hover {
+        background: #3b5be8;
+        transform: scale(1.05);
+    }
+
+    .result {
+        margin-top: 1.5rem;
+        padding: 1rem;
+        background: #f8f9fa;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        font-family: 'Courier New', monospace;
+    }
+
+    /* Footer */
+    footer {
+        background: var(--header);
+        padding: 3rem 2rem;
+        text-align: center;
+        border-top: 2px solid var(--border);
+        color: #555;
+    }
+
+    @media (max-width: 1024px) {
         .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            display: flex;
-            min-height: calc(100vh - 80px);
-        }
-        
-        /* Sidebar */
-        .sidebar {
-            width: 280px;
-            background: var(--card);
-            padding: 2rem 1.5rem;
-            border-right: 1px solid #1e3a6e;
-            position: sticky;
-            top: 80px;
-            height: calc(100vh - 80px);
-            overflow-y: auto;
-        }
-        
-        .sidebar h2 {
-            color: var(--primary);
-            margin-bottom: 1.5rem;
-            font-size: 1.3rem;
-            padding-bottom: 0.8rem;
-            border-bottom: 2px solid var(--primary);
-        }
-        
-        .toc {
-            list-style: none;
-        }
-        
-        .toc li {
-            margin-bottom: 0.6rem;
-        }
-        
-        .toc a {
-            color: var(--text);
-            text-decoration: none;
-            display: block;
-            padding: 0.5rem 1rem;
-            border-radius: 6px;
-            transition: all 0.3s;
-        }
-        
-        .toc a:hover,
-        .toc a.active {
-            background: rgba(0, 229, 255, 0.15);
-            color: var(--primary);
-            padding-left: 1.5rem;
-        }
-        
-        /* Main Content */
-        .main-content {
-            flex: 1;
-            padding: 2.5rem 3rem;
-            max-width: 1100px;
-        }
-        
-        section {
-            margin-bottom: 4rem;
-        }
-        
-        h1 {
-            font-size: 2.8rem;
-            margin-bottom: 1rem;
-            background: linear-gradient(90deg, var(--primary), #ffffff);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        
-        h2 {
-            font-size: 2rem;
-            color: var(--primary);
-            margin-bottom: 1.2rem;
-            padding-bottom: 0.6rem;
-            border-bottom: 2px solid rgba(0, 229, 255, 0.3);
-        }
-        
-        h3 {
-            font-size: 1.4rem;
-            color: #a0e0ff;
-            margin: 2rem 0 1rem;
-        }
-        
-        p, li {
-            font-size: 1.1rem;
-            margin-bottom: 1rem;
-        }
-        
-        .math {
-            background: rgba(19, 35, 74, 0.6);
-            padding: 1rem 1.5rem;
-            border-radius: 8px;
-            margin: 1.5rem 0;
-            font-family: 'Courier New', monospace;
-            font-size: 1.15rem;
-            overflow-x: auto;
-            border-left: 5px solid var(--primary);
-        }
-        
-        .card {
-            background: var(--card);
-            border-radius: 12px;
-            padding: 2rem;
-            margin: 1.5rem 0;
-            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
-            border: 1px solid rgba(0, 229, 255, 0.2);
-        }
-
-        /* Matrix Styling */
-.matrix {
-    width: 100%;
-    max-width: 420px;
-    border-collapse: collapse;
-    margin: 1rem 0;
-    background: #0f1f3d;
-    border: 2px solid var(--primary);
-    border-radius: 8px;
-    overflow: hidden;
-}
-
-.matrix td {
-    padding: 12px 16px;
-    text-align: center;
-    border: 1px solid #1e3a6e;
-    font-family: 'Courier New', monospace;
-    color: #a0f0ff;
-}
-
-.matrix tr:first-child td {
-    background: #1a2a5c;
-    color: var(--primary);
-    font-weight: 600;
-    border-bottom: 2px solid var(--primary);
-}
-
-/* Extra box for special actions */
-.math-box {
-    background: #13234a;
-    padding: 1rem;
-    border-radius: 8px;
-    margin: 1rem 0;
-    border-left: 5px solid var(--primary);
-    font-family: 'Courier New', monospace;
-}
-        
-        /* Interactive Lab */
-        .interactive-lab {
-            background: linear-gradient(135deg, #13234a, #1a2a5c);
-            border-radius: 16px;
-            padding: 2rem;
-            margin: 2.5rem 0;
-            border: 2px solid var(--primary);
-        }
-        
-        .lab-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 1.5rem;
-        }
-        
-        .canvas-container {
-            display: flex;
-            gap: 2rem;
-            flex-wrap: wrap;
-        }
-        
-        canvas {
-            background: #0a1128;
-            border-radius: 12px;
-            border: 2px solid var(--accent);
-        }
-        
-        .controls {
-            display: flex;
             flex-direction: column;
-            gap: 1rem;
-            min-width: 260px;
         }
-        
-        .gate-palette {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 10px;
+        .sidebar {
+            width: 100%;
+            height: auto;
+            position: relative;
+            top: 0;
         }
-        
-        .gate-btn {
-            background: #1e3a6e;
-            color: white;
-            border: 2px solid var(--primary);
-            padding: 12px 8px;
-            border-radius: 8px;
-            text-align: center;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .gate-btn:hover {
-            background: var(--primary);
-            color: #0a1128;
-            transform: translateY(-2px);
-        }
-        
-        .circuit-timeline {
-            background: #0a1128;
-            padding: 1rem;
-            border-radius: 8px;
-            min-height: 80px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-        }
-        
-        .timeline-gate {
-            background: #1e3a6e;
-            color: var(--primary);
-            padding: 8px 16px;
-            border-radius: 50px;
-            font-size: 0.9rem;
-            font-weight: bold;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        button.primary {
-            background: var(--primary);
-            color: #0a1128;
-            border: none;
-            padding: 14px 28px;
-            font-size: 1.1rem;
-            font-weight: 700;
-            border-radius: 50px;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        button.primary:hover {
-            transform: scale(1.05);
-            box-shadow: 0 0 20px var(--primary);
-        }
-        
-        .result {
-            margin-top: 1.5rem;
-            padding: 1rem;
-            background: rgba(10, 17, 40, 0.8);
-            border-radius: 8px;
-            font-family: 'Courier New', monospace;
-        }
-        
-        /* Footer */
-        footer {
-            background: #0a1128;
-            padding: 3rem 2rem;
-            text-align: center;
-            border-top: 2px solid var(--primary);
-            color: #8cb8d0;
-        }
-        
-        @media (max-width: 1024px) {
-            .container {
-                flex-direction: column;
-            }
-            .sidebar {
-                width: 100%;
-                height: auto;
-                position: relative;
-                top: 0;
-            }
-        }
-        
-        .section-nav {
-            margin: 2rem 0;
-            padding: 1rem;
-            background: var(--card);
-            border-radius: 8px;
-        }
-    </style>
+    }
+</style>    
 </head>
 <body>
     <header>
         <div class="header-content">
             <div class="logo">
-                ⚛️ Quantum Computation &amp; Circuits
+                Quantum Computation &amp; Circuits
             </div>
             <nav>
                 <ul>
@@ -479,7 +430,7 @@
         </table>
 
         <h4>2. Hadamard Gate (H)</h4>
-        <p>The most important gate for creating superposition.</p>
+        <p>The most important gate for creating superposition.</p> 
         
         <table class="matrix">
             <tr><td colspan="4"><strong>Hadamard Gate</strong></td></tr>
@@ -740,8 +691,9 @@
     </div>
 
     <footer>
-        <p>© 2026 Quantum Education Project • Built as a pure HTML/CSS/JS educational resource • No external frameworks used</p>
-        <p style="margin-top: 1rem;">All content is grounded in standard quantum information theory. Feel free to fork and extend this page for your own educational projects.</p>
+        <p>© 2026 <strong>Quantum Computer Emulator</strong> — 
+        BroncoHacks 2026 @ Cal Poly Pomona</p>
+        <p style="margin-top: 1rem;">Educational documentation • Built with pure HTML, CSS & JavaScript • An open-source project</p>
     </footer>
 
     <script>
