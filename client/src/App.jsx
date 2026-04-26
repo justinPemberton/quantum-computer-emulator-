@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import YAML from "yaml";
+import infoPageHtml from "./InfoPage/InfoPage.html?raw";
 
 const BOX_SIZE = 50;
 const LINE_STEP = 140;
@@ -914,6 +915,7 @@ export default function App() {
   const [output, setOutput] = useState("");
   const [runTimes, setRunTimes] = useState(25);
   const [batchRunning, setBatchRunning] = useState(false);
+  const [learnOpen, setLearnOpen] = useState(false);
   const [functionToolOpen, setFunctionToolOpen] = useState(false);
   const [functionToolMode, setFunctionToolMode] = useState("UF");
   const [ufExpr, setUfExpr] = useState("x0 ^ x1");
@@ -1638,7 +1640,7 @@ export default function App() {
       <div style={styles.sidebar}>
         <h2>Quantum Diagram</h2>
 
-        <button onClick={zoomIn}>Zoom In</button>
+        <button onClick={() => setLearnOpen(true)}>Learn</button>
         <button onClick={zoomOut}>Zoom Out</button>
         <button onClick={resetView}>Reset View</button>
         <button onClick={addRow}>Add Row</button>
@@ -2252,6 +2254,38 @@ export default function App() {
 
               <div style={styles.modalButtons}>
                 <button onClick={() => setFunctionToolOpen(false)}>Close</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {learnOpen && (
+          <div style={styles.modalOverlay} onMouseDown={() => setLearnOpen(false)}>
+            <div
+              style={{
+                ...styles.modal,
+                width: "92vw",
+                height: "92vh",
+                maxWidth: 1400,
+                maxHeight: "92vh",
+                display: "flex",
+                flexDirection: "column",
+                padding: 12
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                <h3 style={{ margin: 0 }}>Learn</h3>
+                <button onClick={() => setLearnOpen(false)}>Close</button>
+              </div>
+              <div style={{ flex: 1, marginTop: 10, border: "2px solid #ddd", borderRadius: 10, overflow: "hidden" }}>
+                <iframe
+                  title="Quantum Info Page"
+                  srcDoc={infoPageHtml}
+                  style={{ width: "100%", height: "100%", border: "none" }}
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                />
               </div>
             </div>
           </div>
