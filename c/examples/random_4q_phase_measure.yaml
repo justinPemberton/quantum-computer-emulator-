@@ -1,0 +1,32 @@
+qubits: 4
+
+vectors:
+  - id: v0
+    operations:
+      - gate: H
+        targets: [q0, q1, q2, q3]
+
+  - id: v1
+    operations:
+      - gate: S
+        targets: [q0, q1, q2, q3]
+
+  - id: v2
+    operations:
+      - gate: S
+        targets: [q1, q2, q3]
+
+  - id: v3
+    operations:
+      - gate: S
+        targets: [q2, q3]
+
+  - id: v4
+    operations:
+      - gate: S
+        targets: [q3]
+
+  - id: v5
+    operations:
+      - gate: MEASURE
+        targets: [q0, q1, q2, q3]

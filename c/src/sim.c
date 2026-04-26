@@ -1,9 +1,12 @@
 #include "sim.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
 
 static int history_reserve(StateHistory *h, size_t cap)
 {
@@ -50,7 +53,25 @@ static int measurements_push(MeasurementHistory *h, MeasurementEvent event)
 static uint64_t seed_from_env(void)
 {
     const char *s = getenv("QSIM_SEED");
-    if (!s || *s == '\0') return UINT64_C(1);
+    if (!s || *s == '\0') {
+        uint64_t seed = 0;
+        int fd = open("/dev/urandom", O_RDONLY);
+        if (fd >= 0) {
+            ssize_t n = read(fd, &seed, sizeof(seed));
+            close(fd);
+            if (n == (ssize_t)sizeof(seed) && seed != 0) return seed;
+        }
+
+        struct timespec ts;
+        if (clock_gettime(CLOCK_REALTIME, &ts) == 0) {
+            seed ^= (uint64_t)ts.tv_sec;
+            seed ^= (uint64_t)ts.tv_nsec << 32;
+        }
+        seed ^= (uint64_t)(unsigned)getpid() << 16;
+        seed ^= (uint64_t)(uintptr_t)&seed;
+        if (seed == 0) seed = UINT64_C(1);
+        return seed;
+    }
 
     errno = 0;
     char *end = NULL;

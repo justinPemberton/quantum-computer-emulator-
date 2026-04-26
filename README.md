@@ -74,7 +74,10 @@ Print every intermediate state:
 ./c/build/bin/qsim path/to/circuit.yaml --steps
 ```
 
-Measurement randomness is controlled by `QSIM_SEED` (default: `1`).
+Measurement randomness is controlled by `QSIM_SEED`:
+
+- unset: seed from OS entropy (random each run)
+- set to an integer: deterministic/reproducible runs
 
 ## Examples
 
