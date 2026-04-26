@@ -28,6 +28,19 @@ function matrixFlow({ x1, x2, x3, x4 }) {
   return `[[{real:${a}, imag:0}, {real:${b}, imag:0}], [{real:${c}, imag:0}, {real:${d}, imag:0}]]`;
 }
 
+function uniqIds(ids) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of Array.isArray(ids) ? ids : []) {
+    const id = String(raw ?? "").trim();
+    if (!id) continue;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
 function buildCircuitYaml(configObj) {
   const qubits = configObj?.circuit?.qubits;
   if (!Array.isArray(qubits) || qubits.length === 0) {
@@ -61,13 +74,29 @@ function buildCircuitYaml(configObj) {
       const gate = normalizeGate(seg?.gate);
       if (!gate) continue;
 
+      const controlsRaw = uniqIds(seg?.controls);
+      const controlIndices = [];
+      for (const ctrlId of controlsRaw) {
+        const idx = idToIndex.get(ctrlId);
+        if (idx == null) {
+          throw new Error(`controls contains unknown qubit '${ctrlId}' at qubit ${qi}, segment ${col}`);
+        }
+        if (idx === qi) {
+          throw new Error(`controls cannot include target qubit '${ctrlId}' at qubit ${qi}, segment ${col}`);
+        }
+        controlIndices.push(idx);
+      }
+
       if (["H", "X", "Y", "Z", "S", "T"].includes(gate)) {
-        ops.push({ gate, target: qi });
+        ops.push({ gate, target: qi, controls: controlIndices });
         continue;
       }
 
       if (gate === "MEASURE") {
-        ops.push({ gate, target: qi });
+        if (controlIndices.length > 0) {
+          throw new Error(`MEASURE does not support controls at qubit ${qi}, segment ${col}`);
+        }
+        ops.push({ gate, target: qi, controls: [] });
         continue;
       }
 
@@ -91,7 +120,7 @@ function buildCircuitYaml(configObj) {
           xIndices.push(idx);
         }
 
-        ops.push({ gate, function: func, xBits: xIndices, yBit: qi });
+        ops.push({ gate, function: func, xBits: xIndices, yBit: qi, controls: controlIndices });
         continue;
       }
 
@@ -114,7 +143,10 @@ function buildCircuitYaml(configObj) {
         if (seenSwaps.has(key)) continue;
         seenSwaps.add(key);
 
-        ops.push({ gate, targets: [a, b] });
+        if (controlIndices.includes(a) || controlIndices.includes(b)) {
+          throw new Error(`SWAP controls cannot include swap targets at qubit ${qi}, segment ${col}`);
+        }
+        ops.push({ gate, targets: [a, b], controls: controlIndices });
         continue;
       }
 
@@ -122,7 +154,7 @@ function buildCircuitYaml(configObj) {
         if (!seg?.matrix) {
           throw new Error(`OTHER gate missing matrix at qubit ${qi}, segment ${col}`);
         }
-        ops.push({ gate, target: qi, matrix: matrixFlow(seg.matrix) });
+        ops.push({ gate, target: qi, matrix: matrixFlow(seg.matrix), controls: controlIndices });
         continue;
       }
 
@@ -136,6 +168,9 @@ function buildCircuitYaml(configObj) {
 
     for (const op of ops) {
       out += `      - gate: ${op.gate}\n`;
+      if (op.controls?.length > 0) {
+        out += `        controls: [${op.controls.map((i) => `q${i}`).join(", ")}]\n`;
+      }
       if (op.gate === "UF") {
         out += `        function: ${op.function}\n`;
         if (op.xBits.length > 0) {

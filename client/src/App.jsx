@@ -66,6 +66,19 @@ function uuid() {
   return String(Math.random()).slice(2);
 }
 
+function uniqIds(ids) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of Array.isArray(ids) ? ids : []) {
+    const id = String(raw ?? "").trim();
+    if (!id) continue;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
 function buildQsimYaml(configObj) {
   const qubits = configObj?.circuit?.qubits;
   if (!Array.isArray(qubits) || qubits.length === 0) {
@@ -100,13 +113,29 @@ function buildQsimYaml(configObj) {
       const gate = normalizeGate(seg?.gate);
       if (!gate) continue;
 
+      const controlsRaw = uniqIds(seg?.controls);
+      const controlIndices = [];
+      for (const ctrlId of controlsRaw) {
+        const idx = idToIndex.get(ctrlId);
+        if (idx == null) {
+          throw new Error(`controls contains unknown qubit '${ctrlId}' at qubit ${qi}, segment ${col}`);
+        }
+        if (idx === qi) {
+          throw new Error(`controls cannot include target qubit '${ctrlId}' at qubit ${qi}, segment ${col}`);
+        }
+        controlIndices.push(idx);
+      }
+
       if (["H", "X", "Y", "Z", "S", "T"].includes(gate)) {
-        ops.push({ gate, target: qi });
+        ops.push({ gate, target: qi, controls: controlIndices });
         continue;
       }
 
       if (gate === "MEASURE") {
-        ops.push({ gate, target: qi });
+        if (controlIndices.length > 0) {
+          throw new Error(`MEASURE does not support controls at qubit ${qi}, segment ${col}`);
+        }
+        ops.push({ gate, target: qi, controls: [] });
         continue;
       }
 
@@ -130,7 +159,7 @@ function buildQsimYaml(configObj) {
           xIndices.push(idx);
         }
 
-        ops.push({ gate, function: func, xBits: xIndices, yBit: qi });
+        ops.push({ gate, function: func, xBits: xIndices, yBit: qi, controls: controlIndices });
         continue;
       }
 
@@ -153,7 +182,10 @@ function buildQsimYaml(configObj) {
         if (seenSwaps.has(key)) continue;
         seenSwaps.add(key);
 
-        ops.push({ gate, targets: [a, b] });
+        if (controlIndices.includes(a) || controlIndices.includes(b)) {
+          throw new Error(`SWAP controls cannot include swap targets at qubit ${qi}, segment ${col}`);
+        }
+        ops.push({ gate, targets: [a, b], controls: controlIndices });
         continue;
       }
 
@@ -161,7 +193,7 @@ function buildQsimYaml(configObj) {
         if (!seg?.matrix) {
           throw new Error(`OTHER gate missing matrix at qubit ${qi}, segment ${col}`);
         }
-        ops.push({ gate, target: qi, matrix: matrixFlow(seg.matrix) });
+        ops.push({ gate, target: qi, matrix: matrixFlow(seg.matrix), controls: controlIndices });
         continue;
       }
 
@@ -175,6 +207,9 @@ function buildQsimYaml(configObj) {
 
     for (const op of ops) {
       out += `      - gate: ${op.gate}\n`;
+      if (op.controls?.length > 0) {
+        out += `        controls: [${op.controls.map((i) => `q${i}`).join(", ")}]\n`;
+      }
       if (op.gate === "UF") {
         out += `        function: ${op.function}\n`;
         if (op.xBits.length > 0) {
@@ -251,6 +286,19 @@ function buildUiConfigFromCircuitYamlText(yamlText) {
       const gate = normalizeGate(op?.gate);
       if (!gate) continue;
 
+      const controlsRaw = op?.controls;
+      const controlList = Array.isArray(controlsRaw) ? controlsRaw : controlsRaw != null ? [controlsRaw] : [];
+      const controlIds = [];
+      const seen = new Set();
+      for (const c of controlList) {
+        const idx = parseQubitIndex(c);
+        if (idx < 0 || idx >= qubitCount) throw new Error(`control out of range in vector ${col}`);
+        const id = `q${idx}`;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        controlIds.push(id);
+      }
+
       if (gate === "UF") {
         const func = String(op?.function ?? "parity").trim().toLowerCase();
         if (!["parity", "const0", "const1"].includes(func)) {
@@ -272,6 +320,9 @@ function buildUiConfigFromCircuitYamlText(yamlText) {
         const seg = ensureEmpty(col, yBit, "UF");
         seg.gate = "UF";
         seg.uf = { function: func, x_bits: xb };
+        const nextControls = controlIds.filter((id) => id !== `q${yBit}`);
+        if (nextControls.length > 0) seg.controls = nextControls;
+        else delete seg.controls;
         continue;
       }
 
@@ -293,6 +344,9 @@ function buildUiConfigFromCircuitYamlText(yamlText) {
         const seg = config.circuit.qubits[min].segments[col];
         seg.gate = "SWAP";
         seg.swapWith = `q${max}`;
+        const nextControls = controlIds.filter((id) => id !== `q${min}` && id !== `q${max}`);
+        if (nextControls.length > 0) seg.controls = nextControls;
+        else delete seg.controls;
         continue;
       }
 
@@ -321,6 +375,9 @@ function buildUiConfigFromCircuitYamlText(yamlText) {
           x3: entry(1, 0),
           x4: entry(1, 1)
         };
+        const nextControls = controlIds.filter((id) => id !== `q${t}`);
+        if (nextControls.length > 0) seg.controls = nextControls;
+        else delete seg.controls;
         continue;
       }
 
@@ -333,6 +390,12 @@ function buildUiConfigFromCircuitYamlText(yamlText) {
         delete seg.matrix;
         delete seg.uf;
         delete seg.swapWith;
+        if (gate === "MEASURE" && controlIds.length > 0) {
+          throw new Error(`MEASURE does not support controls in vector ${col}`);
+        }
+        const nextControls = controlIds.filter((id) => id !== `q${t}`);
+        if (nextControls.length > 0) seg.controls = nextControls;
+        else delete seg.controls;
       }
     }
   }
@@ -450,6 +513,15 @@ export default function App() {
 
     segment.gate = gateType;
 
+    if (gateType === "none") {
+      delete segment.matrix;
+      delete segment.uf;
+      delete segment.swapWith;
+      delete segment.controls;
+      saveConfig(nextConfig);
+      return;
+    }
+
     if (gateType === "OTHER") {
       segment.matrix = {
         x1: 1,
@@ -459,6 +531,10 @@ export default function App() {
       };
       delete segment.uf;
       delete segment.swapWith;
+      if (Array.isArray(segment.controls)) {
+        segment.controls = segment.controls.filter((id) => id !== qubitId);
+        if (segment.controls.length === 0) delete segment.controls;
+      }
     } else if (gateType === "UF") {
       segment.uf =
         segment.uf ??
@@ -470,15 +546,34 @@ export default function App() {
         });
       delete segment.matrix;
       delete segment.swapWith;
+      if (Array.isArray(segment.controls)) {
+        segment.controls = segment.controls.filter((id) => id !== qubitId);
+        if (segment.controls.length === 0) delete segment.controls;
+      }
     } else if (gateType === "SWAP") {
       const other = nextConfig.circuit.qubits.find((q) => q.id !== qubitId);
       segment.swapWith = other ? other.id : null;
       delete segment.matrix;
       delete segment.uf;
+      if (Array.isArray(segment.controls)) {
+        segment.controls = segment.controls.filter(
+          (id) => id !== qubitId && id !== segment.swapWith
+        );
+        if (segment.controls.length === 0) delete segment.controls;
+      }
+    } else if (gateType === "MEASURE") {
+      delete segment.matrix;
+      delete segment.uf;
+      delete segment.swapWith;
+      delete segment.controls;
     } else {
       delete segment.matrix;
       delete segment.uf;
       delete segment.swapWith;
+      if (Array.isArray(segment.controls)) {
+        segment.controls = segment.controls.filter((id) => id !== qubitId);
+        if (segment.controls.length === 0) delete segment.controls;
+      }
     }
 
     saveConfig(nextConfig);
@@ -647,6 +742,147 @@ export default function App() {
       const msg = err instanceof Error ? err.message : String(err);
       return `# Error generating circuit YAML: ${msg}\n`;
     }
+  }, [config]);
+
+  const controlOverlay = useMemo(() => {
+    const qubits = config?.circuit?.qubits;
+    if (!Array.isArray(qubits) || qubits.length === 0) return [];
+
+    const idToY = new Map();
+    for (const q of qubits) {
+      if (q?.id && typeof q.y === "number") idToY.set(String(q.id), q.y);
+    }
+
+    const elements = [];
+
+    for (let qi = 0; qi < qubits.length; qi++) {
+      const q = qubits[qi];
+      const segs = Array.isArray(q?.segments) ? q.segments : [];
+      for (let col = 0; col < segs.length; col++) {
+        const seg = segs[col];
+        const gate = normalizeGate(seg?.gate);
+        if (!gate) continue;
+
+        const controls = uniqIds(seg?.controls);
+        if (controls.length === 0) continue;
+
+        const gateX = START_X + col * LINE_STEP + LINE_STEP / 2;
+
+        const ys = [];
+        const targetY = idToY.get(String(q.id));
+        if (typeof targetY === "number") ys.push(targetY);
+
+        if (gate === "SWAP" && seg?.swapWith) {
+          const otherY = idToY.get(String(seg.swapWith));
+          if (typeof otherY === "number") ys.push(otherY);
+        }
+
+        const controlYs = [];
+        for (const cid of controls) {
+          const cy = idToY.get(cid);
+          if (typeof cy !== "number") continue;
+          controlYs.push(cy);
+          ys.push(cy);
+        }
+
+        if (ys.length < 2) continue;
+
+        const yMin = Math.min(...ys);
+        const yMax = Math.max(...ys);
+
+        elements.push(
+          <line
+            key={`${q.id}:${seg.id}:ctrl-line`}
+            x1={gateX}
+            y1={yMin}
+            x2={gateX}
+            y2={yMax}
+            stroke="#111"
+            strokeWidth="2"
+          />
+        );
+
+        for (const cy of controlYs) {
+          elements.push(
+            <circle
+              key={`${q.id}:${seg.id}:ctrl-dot:${cy}`}
+              cx={gateX}
+              cy={cy}
+              r="6"
+              fill="#111"
+            />
+          );
+        }
+      }
+    }
+
+    return elements;
+  }, [config]);
+
+  const ufOverlay = useMemo(() => {
+    const qubits = config?.circuit?.qubits;
+    if (!Array.isArray(qubits) || qubits.length === 0) return [];
+
+    const idToY = new Map();
+    for (const q of qubits) {
+      if (q?.id && typeof q.y === "number") idToY.set(String(q.id), q.y);
+    }
+
+    const elements = [];
+
+    for (let qi = 0; qi < qubits.length; qi++) {
+      const q = qubits[qi];
+      const segs = Array.isArray(q?.segments) ? q.segments : [];
+      for (let col = 0; col < segs.length; col++) {
+        const seg = segs[col];
+        const gate = normalizeGate(seg?.gate);
+        if (gate !== "UF") continue;
+
+        const gateX = START_X + col * LINE_STEP + LINE_STEP / 2;
+        const targetY = idToY.get(String(q.id));
+        if (typeof targetY !== "number") continue;
+
+        const xIds = uniqIds(seg?.uf?.x_bits).filter((id) => id !== String(q.id));
+        const xYs = [];
+        for (const xid of xIds) {
+          const y = idToY.get(xid);
+          if (typeof y !== "number") continue;
+          xYs.push(y);
+        }
+        if (xYs.length === 0) continue;
+
+        const yMin = Math.min(targetY, ...xYs);
+        const yMax = Math.max(targetY, ...xYs);
+
+        elements.push(
+          <line
+            key={`${q.id}:${seg.id}:uf-line`}
+            x1={gateX}
+            y1={yMin}
+            x2={gateX}
+            y2={yMax}
+            stroke="#4c6fff"
+            strokeWidth="2"
+          />
+        );
+
+        for (const y of xYs) {
+          elements.push(
+            <circle
+              key={`${q.id}:${seg.id}:uf-x:${y}`}
+              cx={gateX}
+              cy={y}
+              r="6"
+              fill="#fff"
+              stroke="#4c6fff"
+              strokeWidth="2"
+            />
+          );
+        }
+      }
+    }
+
+    return elements;
   }, [config]);
 
   function openYamlImport() {
@@ -854,6 +1090,11 @@ export default function App() {
                 </foreignObject>
               </g>
             ))}
+
+            <g pointerEvents="none">
+              {ufOverlay}
+              {controlOverlay}
+            </g>
           </g>
         </svg>
 
@@ -867,11 +1108,11 @@ export default function App() {
               onMouseDown={(e) => e.stopPropagation()}
               onClick={(e) => e.stopPropagation()}
             >
-              <div style={styles.popupRow}>
-                <span style={styles.popupLabel}>Gate</span>
-                <select
-                  style={styles.popupSelect}
-                  value={hasGate ? segment.gate : "none"}
+	              <div style={styles.popupRow}>
+	                <span style={styles.popupLabel}>Gate</span>
+	                <select
+	                  style={styles.popupSelect}
+	                  value={hasGate ? segment.gate : "none"}
                   onChange={(e) => {
                     addGate(qubit.id, segment.id, e.target.value);
                   }}
@@ -881,11 +1122,44 @@ export default function App() {
                       {g === "none" ? "(none)" : g}
                     </option>
                   ))}
-                </select>
-              </div>
+	                </select>
+	              </div>
 
-              {segment.gate === "UF" && (
-                <>
+                {hasGate && segment.gate !== "MEASURE" && (
+                  <div style={styles.popupRow}>
+                    <span style={styles.popupLabel}>Ctrl</span>
+                    <select
+                      style={{ ...styles.popupSelect, height: 110 }}
+                      multiple
+                      value={segment.controls ?? []}
+                      onChange={(e) => {
+                        const selected = Array.from(e.target.selectedOptions).map((o) => o.value);
+                        const nextConfig = structuredClone(config);
+                        const q = nextConfig.circuit.qubits.find((qq) => qq.id === qubit.id);
+                        const s = q?.segments.find((ss) => ss.id === segment.id);
+                        if (!s) return;
+                        const exclude = new Set([qubit.id]);
+                        if (s.gate === "SWAP" && s.swapWith) exclude.add(String(s.swapWith));
+                        const filtered = uniqIds(selected).filter((id) => !exclude.has(id));
+                        if (filtered.length > 0) s.controls = filtered;
+                        else delete s.controls;
+                        saveConfig(nextConfig);
+                      }}
+                    >
+                      {config.circuit.qubits
+                        .map((qq) => qq.id)
+                        .filter((id) => id !== qubit.id && !(segment.gate === "SWAP" && id === segment.swapWith))
+                        .map((id) => (
+                          <option key={id} value={id}>
+                            {id}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                )}
+	
+	              {segment.gate === "UF" && (
+	                <>
                   <div style={styles.popupRow}>
                     <span style={styles.popupLabel}>f(x)</span>
                     <select
