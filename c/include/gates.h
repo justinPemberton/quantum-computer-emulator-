@@ -11,6 +11,7 @@ typedef enum {
     GATE_S,
     GATE_T,
     GATE_MEASURE,
+    GATE_FX,
     GATE_UF,
     GATE_OTHER,
     GATE_SWAP,

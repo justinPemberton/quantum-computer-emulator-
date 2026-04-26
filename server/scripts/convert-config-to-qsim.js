@@ -19,13 +19,24 @@ function mustNumber(value, ctx) {
   return n;
 }
 
-function matrixFlow({ x1, x2, x3, x4 }) {
-  const a = mustNumber(x1, "matrix.x1");
-  const b = mustNumber(x2, "matrix.x2");
-  const c = mustNumber(x3, "matrix.x3");
-  const d = mustNumber(x4, "matrix.x4");
+function complexFrom(value, ctx) {
+  if (value != null && typeof value === "object") {
+    const re = mustNumber(value.real ?? value.re ?? 0, `${ctx}.real`);
+    const im = mustNumber(value.imag ?? value.im ?? 0, `${ctx}.imag`);
+    return { real: Math.abs(re) < 1e-15 ? 0 : re, imag: Math.abs(im) < 1e-15 ? 0 : im };
+  }
 
-  return `[[{real:${a}, imag:0}, {real:${b}, imag:0}], [{real:${c}, imag:0}, {real:${d}, imag:0}]]`;
+  const re = mustNumber(value ?? 0, ctx);
+  return { real: Math.abs(re) < 1e-15 ? 0 : re, imag: 0 };
+}
+
+function matrixFlow({ x1, x2, x3, x4 }) {
+  const a = complexFrom(x1, "matrix.x1");
+  const b = complexFrom(x2, "matrix.x2");
+  const c = complexFrom(x3, "matrix.x3");
+  const d = complexFrom(x4, "matrix.x4");
+
+  return `[[{real:${a.real}, imag:${a.imag}}, {real:${b.real}, imag:${b.imag}}], [{real:${c.real}, imag:${c.imag}}, {real:${d.real}, imag:${d.imag}}]]`;
 }
 
 function uniqIds(ids) {
@@ -100,6 +111,33 @@ function buildCircuitYaml(configObj) {
         continue;
       }
 
+      if (gate === "FX") {
+        if (controlIndices.length > 0) {
+          throw new Error(`FX does not support controls at qubit ${qi}, segment ${col}`);
+        }
+
+        const fx = seg?.fx ?? {};
+        const funcRaw = fx?.function ?? "parity";
+        const func = String(funcRaw).trim().toLowerCase();
+        if (!["parity", "const0", "const1"].includes(func)) {
+          throw new Error(`FX gate has invalid function '${String(funcRaw)}' at qubit ${qi}, segment ${col}`);
+        }
+
+        const xbRaw = Array.isArray(fx?.x_bits) ? fx.x_bits : [];
+        const xIndices = [];
+        for (const bit of xbRaw) {
+          const id = String(bit);
+          const idx = idToIndex.get(id);
+          if (idx == null) {
+            throw new Error(`FX x_bits contains unknown qubit '${id}' at qubit ${qi}, segment ${col}`);
+          }
+          xIndices.push(idx);
+        }
+
+        ops.push({ gate, function: func, xBits: xIndices, controls: [] });
+        continue;
+      }
+
       if (gate === "UF") {
         const uf = seg?.uf ?? {};
         const funcRaw = uf?.function ?? "parity";
@@ -166,7 +204,10 @@ function buildCircuitYaml(configObj) {
     out += `  - id: v${vectorIndex++}\n`;
     out += "    operations:\n";
 
-    for (const op of ops) {
+    const preOps = ops.filter((op) => op.gate !== "FX");
+    const fxOps = ops.filter((op) => op.gate === "FX");
+
+    for (const op of [...preOps, ...fxOps]) {
       out += `      - gate: ${op.gate}\n`;
       if (op.controls?.length > 0) {
         out += `        controls: [${op.controls.map((i) => `q${i}`).join(", ")}]\n`;
@@ -177,6 +218,11 @@ function buildCircuitYaml(configObj) {
           out += `        x_bits: [${op.xBits.map((i) => `q${i}`).join(", ")}]\n`;
         }
         out += `        y_bit: q${op.yBit}\n`;
+      } else if (op.gate === "FX") {
+        out += `        function: ${op.function}\n`;
+        if (op.xBits.length > 0) {
+          out += `        x_bits: [${op.xBits.map((i) => `q${i}`).join(", ")}]\n`;
+        }
       } else {
         const targets = op.targets ?? [op.target];
         out += `        targets: [${targets.map((i) => `q${i}`).join(", ")}]\n`;

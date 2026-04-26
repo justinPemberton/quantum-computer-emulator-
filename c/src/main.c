@@ -111,10 +111,12 @@ int main(int argc, char **argv)
     StateHistory history;
     StateHistory *history_ptr = steps ? &history : NULL;
     MeasurementHistory measurements;
-    if (sim_run(&circuit, &state, scratch, history_ptr, &measurements) != 0) {
+    FxHistory fx;
+    if (sim_run(&circuit, &state, scratch, history_ptr, &measurements, &fx) != 0) {
         fprintf(stderr, "simulation failed\n");
         if (history_ptr) sim_history_free(history_ptr);
         sim_measurements_free(&measurements);
+        sim_fx_free(&fx);
         free(scratch);
         qs_free(&state);
         circuit_free(&circuit);
@@ -126,6 +128,11 @@ int main(int argc, char **argv)
         printf("measure q%d = %d  (p0=%.6f, p1=%.6f)\n", m->qubit, m->value, m->p0, m->p1);
     }
     sim_measurements_free(&measurements);
+
+    for (size_t i = 0; i < fx.count; i++) {
+        printf("fx = %d\n", fx.events[i].value);
+    }
+    sim_fx_free(&fx);
 
     if (history_ptr) {
         for (size_t i = 0; i < history_ptr->count; i++) {

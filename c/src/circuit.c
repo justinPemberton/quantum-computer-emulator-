@@ -27,6 +27,7 @@ static void op_reset(CircuitOp *op)
 {
     memset(op, 0, sizeof(*op));
     op->kind = (GateKind)-1;
+    op->fx.function = UF_PARITY;
     op->uf.function = UF_PARITY;
     op->uf.y_bit = -1;
 }
@@ -36,6 +37,7 @@ static void op_free(CircuitOp *op)
     if (!op) return;
     free(op->targets);
     free(op->controls);
+    free(op->fx.x_bits);
     free(op->uf.x_bits);
     op_reset(op);
 }
@@ -93,6 +95,10 @@ static int push_current_op(Parser *p, int line_no, char **out_error)
         if (out_error) *out_error = dup_printf("line %d: OTHER gate missing matrix values", line_no);
         return -1;
     }
+    if (op->kind == GATE_FX && op->control_count != 0) {
+        if (out_error) *out_error = dup_printf("line %d: FX does not support controls", line_no);
+        return -1;
+    }
     if (op->kind == GATE_UF) {
         if (op->uf.y_bit < 0 && op->target_count == 1) {
             op->uf.y_bit = op->targets[0];
@@ -101,7 +107,7 @@ static int push_current_op(Parser *p, int line_no, char **out_error)
             if (out_error) *out_error = dup_printf("line %d: UF missing y_bit", line_no);
             return -1;
         }
-    } else if (op->kind != GATE_SWAP && op->target_count == 0) {
+    } else if (op->kind != GATE_SWAP && op->kind != GATE_FX && op->target_count == 0) {
         if (out_error) *out_error = dup_printf("line %d: operation missing targets", line_no);
         return -1;
     }
@@ -540,6 +546,20 @@ static int validate_indices(const Circuit *circuit, char **out_error)
             }
         }
 
+        if (op->kind == GATE_FX) {
+            if (op->control_count != 0) {
+                if (out_error) *out_error = strdup("FX does not support controls");
+                return -1;
+            }
+            for (size_t xb = 0; xb < op->fx.x_bit_count; xb++) {
+                int q = op->fx.x_bits[xb];
+                if (q < 0 || q >= circuit->qubit_count) {
+                    if (out_error) *out_error = strdup("FX x_bits out of range");
+                    return -1;
+                }
+            }
+        }
+
         if (op->kind == GATE_UF) {
             if (op->uf.y_bit < 0 || op->uf.y_bit >= circuit->qubit_count) {
                 if (out_error) *out_error = strdup("UF y_bit out of range");
@@ -558,6 +578,55 @@ static int validate_indices(const Circuit *circuit, char **out_error)
             }
         }
     }
+    return 0;
+}
+
+static int validate_fx_rules(const Circuit *circuit, char **out_error)
+{
+    if (!circuit) return -1;
+    if (circuit->qubit_count < 0) return -1;
+
+    bool *measured = calloc((size_t)circuit->qubit_count, sizeof(bool));
+    if (!measured) {
+        if (out_error) *out_error = strdup("out of memory");
+        return -1;
+    }
+
+    bool fx_seen = false;
+
+    for (size_t i = 0; i < circuit->op_count; i++) {
+        const CircuitOp *op = &circuit->ops[i];
+
+        if (fx_seen && op->kind != GATE_FX) {
+            if (out_error) *out_error = strdup("quantum operation not allowed after FX");
+            free(measured);
+            return -1;
+        }
+
+        if (op->kind == GATE_MEASURE) {
+            for (size_t t = 0; t < op->target_count; t++) {
+                int q = op->targets[t];
+                if (q >= 0 && q < circuit->qubit_count) measured[q] = true;
+            }
+            continue;
+        }
+
+        if (op->kind == GATE_FX) {
+            for (size_t xb = 0; xb < op->fx.x_bit_count; xb++) {
+                int q = op->fx.x_bits[xb];
+                if (q < 0 || q >= circuit->qubit_count) continue;
+                if (!measured[q]) {
+                    if (out_error) *out_error = strdup("FX requires x_bits to be measured before use");
+                    free(measured);
+                    return -1;
+                }
+            }
+            fx_seen = true;
+            continue;
+        }
+    }
+
+    free(measured);
     return 0;
 }
 
@@ -696,6 +765,12 @@ int circuit_load_yaml_file(const char *path, Circuit *out_circuit, char **out_er
                 break;
             }
             parser.current_op.kind = kind;
+            if (kind == GATE_FX && parser.current_op.fx.x_bit_count == 0 && parser.current_op.uf.x_bit_count > 0) {
+                parser.current_op.fx.x_bits = parser.current_op.uf.x_bits;
+                parser.current_op.fx.x_bit_count = parser.current_op.uf.x_bit_count;
+                parser.current_op.uf.x_bits = NULL;
+                parser.current_op.uf.x_bit_count = 0;
+            }
         } else if (strcmp(key, "targets") == 0) {
             free(parser.current_op.targets);
             parser.current_op.targets = NULL;
@@ -724,12 +799,16 @@ int circuit_load_yaml_file(const char *path, Circuit *out_circuit, char **out_er
                 free(kv);
                 break;
             }
+            parser.current_op.fx.function = func;
             parser.current_op.uf.function = func;
         } else if (strcmp(key, "x_bits") == 0) {
-            free(parser.current_op.uf.x_bits);
-            parser.current_op.uf.x_bits = NULL;
-            parser.current_op.uf.x_bit_count = 0;
-            if (parse_qubit_list(val, &parser.current_op.uf.x_bits, &parser.current_op.uf.x_bit_count) != 0) {
+            int **list = parser.current_op.kind == GATE_FX ? &parser.current_op.fx.x_bits : &parser.current_op.uf.x_bits;
+            size_t *count =
+                parser.current_op.kind == GATE_FX ? &parser.current_op.fx.x_bit_count : &parser.current_op.uf.x_bit_count;
+            free(*list);
+            *list = NULL;
+            *count = 0;
+            if (parse_qubit_list(val, list, count) != 0) {
                 rc = -1;
                 if (out_error) *out_error = dup_printf("line %d: invalid x_bits list", line_no);
                 free(kv);
@@ -779,6 +858,10 @@ int circuit_load_yaml_file(const char *path, Circuit *out_circuit, char **out_er
     fclose(f);
 
     if (rc == 0 && validate_indices(&parser.circuit, out_error) != 0) {
+        rc = -1;
+    }
+
+    if (rc == 0 && validate_fx_rules(&parser.circuit, out_error) != 0) {
         rc = -1;
     }
 

@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -50,6 +51,19 @@ static int measurements_push(MeasurementHistory *h, MeasurementEvent event)
     return 0;
 }
 
+static int fx_push(FxHistory *h, FxEvent event)
+{
+    if (!h) return 0;
+
+    size_t new_count = h->count + 1;
+    FxEvent *new_events = realloc(h->events, new_count * sizeof(FxEvent));
+    if (!new_events) return -1;
+    h->events = new_events;
+    h->events[h->count] = event;
+    h->count = new_count;
+    return 0;
+}
+
 static uint64_t seed_from_env(void)
 {
     const char *s = getenv("QSIM_SEED");
@@ -85,13 +99,19 @@ int sim_run(const Circuit *circuit,
             QuantumState *state,
             Complex *scratch,
             StateHistory *history,
-            MeasurementHistory *measurements)
+            MeasurementHistory *measurements,
+            FxHistory *fx)
 {
     if (!circuit || !state) return -1;
 
     if (measurements) {
         measurements->events = NULL;
         measurements->count = 0;
+    }
+
+    if (fx) {
+        fx->events = NULL;
+        fx->count = 0;
     }
 
     if (history) {
@@ -104,8 +124,58 @@ int sim_run(const Circuit *circuit,
 
     uint64_t rng_state = seed_from_env();
 
+    int *measured_values = NULL;
+    if (state->qubit_count > 0) {
+        measured_values = malloc((size_t)state->qubit_count * sizeof(int));
+        if (!measured_values) return -1;
+        for (int q = 0; q < state->qubit_count; q++) measured_values[q] = -1;
+    }
+
+    bool fx_seen = false;
+
     for (size_t op_index = 0; op_index < circuit->op_count; op_index++) {
         const CircuitOp *op = &circuit->ops[op_index];
+
+        if (fx_seen && op->kind != GATE_FX) {
+            goto fail;
+        }
+
+        if (op->kind == GATE_FX) {
+            if (op->control_count != 0) {
+                goto fail;
+            }
+
+            int value = 0;
+            switch (op->fx.function) {
+                case UF_PARITY: {
+                    int acc = 0;
+                    for (size_t i = 0; i < op->fx.x_bit_count; i++) {
+                        int q = op->fx.x_bits[i];
+                        if (q < 0 || q >= state->qubit_count || !measured_values || measured_values[q] < 0) {
+                            goto fail;
+                        }
+                        acc ^= (measured_values[q] & 1);
+                    }
+                    value = acc;
+                    break;
+                }
+                case UF_CONST0:
+                    value = 0;
+                    break;
+                case UF_CONST1:
+                    value = 1;
+                    break;
+                default:
+                    goto fail;
+            }
+
+            if (fx_push(fx, (FxEvent){.value = value}) != 0) {
+                goto fail;
+            }
+
+            fx_seen = true;
+            continue;
+        }
 
         if (op->kind == GATE_UF) {
             if (qs_apply_uf(state,
@@ -116,9 +186,9 @@ int sim_run(const Circuit *circuit,
                             op->controls,
                             op->control_count,
                             scratch) != 0) {
-                return -1;
+                goto fail;
             }
-            if (history && history_push(history, state) != 0) return -1;
+            if (history && history_push(history, state) != 0) goto fail;
             continue;
         }
 
@@ -129,30 +199,31 @@ int sim_run(const Circuit *circuit,
                               op->controls,
                               op->control_count,
                               scratch) != 0) {
-                return -1;
+                goto fail;
             }
-            if (history && history_push(history, state) != 0) return -1;
+            if (history && history_push(history, state) != 0) goto fail;
             continue;
         }
 
         if (op->kind == GATE_MEASURE) {
-            if (op->control_count != 0) return -1;
+            if (op->control_count != 0) goto fail;
 
             for (size_t t = 0; t < op->target_count; t++) {
                 int qubit = op->targets[t];
                 int value = 0;
                 double p0 = 0.0;
                 double p1 = 0.0;
-                if (qs_measure(state, qubit, &rng_state, &value, &p0, &p1) != 0) return -1;
+                if (qs_measure(state, qubit, &rng_state, &value, &p0, &p1) != 0) goto fail;
+                if (measured_values && qubit >= 0 && qubit < state->qubit_count) measured_values[qubit] = value;
                 if (measurements_push(measurements, (MeasurementEvent){
                                                         .qubit = qubit,
                                                         .value = value,
                                                         .p0 = p0,
                                                         .p1 = p1,
                                                     }) != 0) {
-                    return -1;
+                    goto fail;
                 }
-                if (history && history_push(history, state) != 0) return -1;
+                if (history && history_push(history, state) != 0) goto fail;
             }
             continue;
         }
@@ -162,7 +233,7 @@ int sim_run(const Circuit *circuit,
             m = &op->other_matrix;
         } else {
             m = gate_standard_matrix(op->kind);
-            if (!m) return -1;
+            if (!m) goto fail;
         }
 
         for (size_t t = 0; t < op->target_count; t++) {
@@ -173,12 +244,17 @@ int sim_run(const Circuit *circuit,
             } else {
                 rc = qs_apply_controlled_gate(state, m, target, op->controls, op->control_count, scratch);
             }
-            if (rc != 0) return -1;
-            if (history && history_push(history, state) != 0) return -1;
+            if (rc != 0) goto fail;
+            if (history && history_push(history, state) != 0) goto fail;
         }
     }
 
+    free(measured_values);
     return 0;
+
+fail:
+    free(measured_values);
+    return -1;
 }
 
 void sim_history_free(StateHistory *history)
@@ -198,4 +274,12 @@ void sim_measurements_free(MeasurementHistory *measurements)
     free(measurements->events);
     measurements->events = NULL;
     measurements->count = 0;
+}
+
+void sim_fx_free(FxHistory *fx)
+{
+    if (!fx) return;
+    free(fx->events);
+    fx->events = NULL;
+    fx->count = 0;
 }

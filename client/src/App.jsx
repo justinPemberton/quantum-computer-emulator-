@@ -6,7 +6,7 @@ const LINE_STEP = 140;
 const ROW_GAP = 90;
 const START_X = 80;
 
-const GATE_OPTIONS = ["none", "H", "X", "Y", "Z", "S", "T", "MEASURE", "UF", "SWAP", "OTHER"];
+const GATE_OPTIONS = ["none", "H", "X", "Y", "Z", "S", "T", "MEASURE", "FX", "UF", "SWAP", "OTHER"];
 
 const defaultConfig = {
   circuit: {
@@ -45,12 +45,23 @@ function mustNumber(value, ctx) {
   return n;
 }
 
+function complexFrom(value, ctx) {
+  if (value != null && typeof value === "object") {
+    const re = mustNumber(value.real ?? value.re ?? 0, `${ctx}.real`);
+    const im = mustNumber(value.imag ?? value.im ?? 0, `${ctx}.imag`);
+    return { real: Math.abs(re) < 1e-15 ? 0 : re, imag: Math.abs(im) < 1e-15 ? 0 : im };
+  }
+
+  const re = mustNumber(value ?? 0, ctx);
+  return { real: Math.abs(re) < 1e-15 ? 0 : re, imag: 0 };
+}
+
 function matrixFlow({ x1, x2, x3, x4 }) {
-  const a = mustNumber(x1, "matrix.x1");
-  const b = mustNumber(x2, "matrix.x2");
-  const c = mustNumber(x3, "matrix.x3");
-  const d = mustNumber(x4, "matrix.x4");
-  return `[[{real:${a}, imag:0}, {real:${b}, imag:0}], [{real:${c}, imag:0}, {real:${d}, imag:0}]]`;
+  const a = complexFrom(x1, "matrix.x1");
+  const b = complexFrom(x2, "matrix.x2");
+  const c = complexFrom(x3, "matrix.x3");
+  const d = complexFrom(x4, "matrix.x4");
+  return `[[{real:${a.real}, imag:${a.imag}}, {real:${b.real}, imag:${b.imag}}], [{real:${c.real}, imag:${c.imag}}, {real:${d.real}, imag:${d.imag}}]]`;
 }
 
 function parseQubitIndex(value) {
@@ -79,6 +90,407 @@ function uniqIds(ids) {
   return out;
 }
 
+function tokenizeBoolExpr(expr) {
+  const s = String(expr ?? "");
+  const tokens = [];
+
+  let i = 0;
+  while (i < s.length) {
+    const ch = s[i];
+
+    if (/\s/.test(ch)) {
+      i++;
+      continue;
+    }
+
+    if (ch === "(") {
+      tokens.push({ type: "lparen" });
+      i++;
+      continue;
+    }
+    if (ch === ")") {
+      tokens.push({ type: "rparen" });
+      i++;
+      continue;
+    }
+
+    if (ch === "!" || ch === "~") {
+      tokens.push({ type: "op", op: "!" });
+      i++;
+      continue;
+    }
+
+    if (ch === "&") {
+      if (s[i + 1] === "&") i++;
+      tokens.push({ type: "op", op: "&" });
+      i++;
+      continue;
+    }
+
+    if (ch === "|") {
+      if (s[i + 1] === "|") i++;
+      tokens.push({ type: "op", op: "|" });
+      i++;
+      continue;
+    }
+
+    if (ch === "^") {
+      tokens.push({ type: "op", op: "^" });
+      i++;
+      continue;
+    }
+
+    if (ch === "0" || ch === "1") {
+      tokens.push({ type: "num", value: Number(ch) });
+      i++;
+      continue;
+    }
+
+    if (ch === "x" || ch === "X") {
+      let j = i + 1;
+      while (j < s.length && /\d/.test(s[j])) j++;
+      if (j === i + 1) throw new Error(`expected digits after '${ch}' at position ${i + 1}`);
+      const idx = Number(s.slice(i + 1, j));
+      if (!Number.isInteger(idx) || idx < 0) throw new Error(`invalid variable x${String(s.slice(i + 1, j))}`);
+      tokens.push({ type: "var", index: idx });
+      i = j;
+      continue;
+    }
+
+    throw new Error(`invalid character '${ch}' at position ${i + 1}`);
+  }
+
+  return tokens;
+}
+
+function boolExprToRpn(tokens) {
+  const prec = { "!": 3, "&": 2, "^": 1, "|": 0 };
+  const rightAssoc = new Set(["!"]);
+
+  const out = [];
+  const stack = [];
+
+  for (const tok of tokens) {
+    if (tok.type === "num" || tok.type === "var") {
+      out.push(tok);
+      continue;
+    }
+
+    if (tok.type === "op") {
+      const p = prec[tok.op];
+      if (p == null) throw new Error(`unknown operator '${tok.op}'`);
+
+      while (stack.length > 0) {
+        const top = stack[stack.length - 1];
+        if (top.type !== "op") break;
+        const tp = prec[top.op];
+        if (tp == null) break;
+
+        const shouldPop = rightAssoc.has(tok.op) ? p < tp : p <= tp;
+        if (!shouldPop) break;
+        out.push(stack.pop());
+      }
+
+      stack.push(tok);
+      continue;
+    }
+
+    if (tok.type === "lparen") {
+      stack.push(tok);
+      continue;
+    }
+
+    if (tok.type === "rparen") {
+      let found = false;
+      while (stack.length > 0) {
+        const top = stack.pop();
+        if (top.type === "lparen") {
+          found = true;
+          break;
+        }
+        out.push(top);
+      }
+      if (!found) throw new Error("mismatched ')'");
+      continue;
+    }
+
+    throw new Error(`unknown token type '${tok.type}'`);
+  }
+
+  while (stack.length > 0) {
+    const top = stack.pop();
+    if (top.type === "lparen" || top.type === "rparen") throw new Error("mismatched '('");
+    out.push(top);
+  }
+
+  return out;
+}
+
+function evalBoolExprRpn(rpn, vars) {
+  const stack = [];
+
+  for (const tok of rpn) {
+    if (tok.type === "num") {
+      stack.push(tok.value & 1);
+      continue;
+    }
+    if (tok.type === "var") {
+      const v = vars?.[tok.index];
+      if (v !== 0 && v !== 1) throw new Error(`x${tok.index} is not set`);
+      stack.push(v);
+      continue;
+    }
+    if (tok.type === "op") {
+      if (tok.op === "!") {
+        if (stack.length < 1) throw new Error("missing operand for '!'");
+        const a = stack.pop();
+        stack.push(a ? 0 : 1);
+        continue;
+      }
+
+      if (stack.length < 2) throw new Error(`missing operand for '${tok.op}'`);
+      const b = stack.pop();
+      const a = stack.pop();
+      if (tok.op === "&") stack.push(a & b);
+      else if (tok.op === "|") stack.push(a | b);
+      else if (tok.op === "^") stack.push(a ^ b);
+      else throw new Error(`unknown operator '${tok.op}'`);
+      continue;
+    }
+
+    throw new Error(`unexpected token '${tok.type}' in RPN`);
+  }
+
+  if (stack.length !== 1) throw new Error("invalid expression");
+  return stack[0] & 1;
+}
+
+function validateUfExpression(expr, varCount) {
+  const n = typeof varCount === "number" ? varCount : Number(varCount);
+  if (!Number.isInteger(n) || n < 1 || n > 8) throw new Error("x bit count must be an integer from 1 to 8");
+
+  const tokens = tokenizeBoolExpr(expr);
+  const rpn = boolExprToRpn(tokens);
+
+  let maxVar = -1;
+  for (const t of tokens) {
+    if (t.type === "var") maxVar = Math.max(maxVar, t.index);
+  }
+  if (maxVar >= n) throw new Error(`expression references x${maxVar} but x bit count is ${n}`);
+
+  const table = [];
+  for (let x = 0; x < 1 << n; x++) {
+    const vars = new Array(n);
+    for (let i = 0; i < n; i++) vars[i] = (x >> i) & 1;
+    table.push(String(evalBoolExprRpn(rpn, vars)));
+  }
+
+  return table.join("");
+}
+
+function qubitsList(indices) {
+  return `[${indices.map((i) => `q${i}`).join(", ")}]`;
+}
+
+function phaseComplex(angle) {
+  const re = Math.cos(angle);
+  const im = Math.sin(angle);
+  return {
+    re: Math.abs(re) < 1e-15 ? 0 : re,
+    im: Math.abs(im) < 1e-15 ? 0 : im
+  };
+}
+
+function phaseMatrixValues(angle) {
+  const { re, im } = phaseComplex(angle);
+  return `[[{real:1, imag:0}, {real:0, imag:0}], [{real:0, imag:0}, {real:${re}, imag:${im}}]]`;
+}
+
+function controlledSwapOp(control, a, b) {
+  return { gate: "SWAP", controls: [control], targets: [a, b] };
+}
+
+function rotateRight4Ops(shift, control, y0 = 4) {
+  const q4 = y0;
+  const q5 = y0 + 1;
+  const q6 = y0 + 2;
+  const q7 = y0 + 3;
+
+  if (shift === 0) return [];
+  if (shift === 1) {
+    return [
+      controlledSwapOp(control, q6, q7),
+      controlledSwapOp(control, q5, q6),
+      controlledSwapOp(control, q4, q5)
+    ];
+  }
+  if (shift === 2) {
+    return [controlledSwapOp(control, q4, q6), controlledSwapOp(control, q5, q7)];
+  }
+  if (shift === 3) {
+    // left-rotate by 1
+    return [
+      controlledSwapOp(control, q4, q5),
+      controlledSwapOp(control, q5, q6),
+      controlledSwapOp(control, q6, q7)
+    ];
+  }
+  throw new Error(`unsupported rotateRight4 shift: ${shift}`);
+}
+
+function shor15CircuitYamlVectors({ N, a }) {
+  const n = Number(N);
+  const base = Number(a);
+  if (!Number.isInteger(n) || n <= 1) throw new Error("N must be an integer > 1");
+  if (n !== 15) throw new Error("only N=15 is supported for the 8-qubit compiled Shor circuit right now");
+  if (!Number.isInteger(base) || base <= 1 || base >= n) throw new Error("a must be an integer with 1 < a < N");
+  if (base !== 2 && base !== 8) throw new Error("supported a values for Shor(8q, N=15) are 2 or 8");
+
+  const ops = [];
+
+  // 8 qubits: x register q0..q3, y register q4..q7.
+
+  // |y> = |1>
+  ops.push({ gate: "X", targets: [4] });
+
+  // Uniform superposition over x
+  ops.push({ gate: "H", targets: [0] });
+  ops.push({ gate: "H", targets: [1] });
+  ops.push({ gate: "H", targets: [2] });
+  ops.push({ gate: "H", targets: [3] });
+
+  // Modular exponentiation: y <- y * a^x mod 15, compiled for a=2 or a=8.
+  const p = base === 2 ? 1 : 3; // base == 2^p mod 15
+  for (let bit = 0; bit < 4; bit++) {
+    const shift = (p * (1 << bit)) % 4;
+    ops.push(...rotateRight4Ops(shift, bit));
+  }
+
+  // Inverse QFT on x register (q0..q3), with q0 as the least-significant bit.
+  ops.push({ gate: "SWAP", targets: [0, 3] });
+  ops.push({ gate: "SWAP", targets: [1, 2] });
+
+  // j=0
+  ops.push({ gate: "H", targets: [0] });
+
+  // j=1
+  ops.push({ gate: "OTHER", controls: [0], targets: [1], matrix: phaseMatrixValues(-Math.PI / 2) });
+  ops.push({ gate: "H", targets: [1] });
+
+  // j=2
+  ops.push({ gate: "OTHER", controls: [0], targets: [2], matrix: phaseMatrixValues(-Math.PI / 4) });
+  ops.push({ gate: "OTHER", controls: [1], targets: [2], matrix: phaseMatrixValues(-Math.PI / 2) });
+  ops.push({ gate: "H", targets: [2] });
+
+  // j=3
+  ops.push({ gate: "OTHER", controls: [0], targets: [3], matrix: phaseMatrixValues(-Math.PI / 8) });
+  ops.push({ gate: "OTHER", controls: [1], targets: [3], matrix: phaseMatrixValues(-Math.PI / 4) });
+  ops.push({ gate: "OTHER", controls: [2], targets: [3], matrix: phaseMatrixValues(-Math.PI / 2) });
+  ops.push({ gate: "H", targets: [3] });
+
+  // Measure x register
+  ops.push({ gate: "MEASURE", targets: [0, 1, 2, 3] });
+
+  let out = "";
+  out += "qubits: 8\n";
+  out += "vectors:\n";
+
+  for (let i = 0; i < ops.length; i++) {
+    const op = ops[i];
+    out += `  - id: v${i}\n`;
+    out += "    operations:\n";
+    out += `      - gate: ${op.gate}\n`;
+
+    if (Array.isArray(op.controls) && op.controls.length > 0) {
+      out += `        controls: ${qubitsList(op.controls)}\n`;
+    }
+
+    if (Array.isArray(op.targets) && op.targets.length > 0) {
+      out += `        targets: ${qubitsList(op.targets)}\n`;
+    }
+
+    if (op.gate === "OTHER") {
+      out += "        matrix:\n";
+      out += `          values: ${op.matrix}\n`;
+    }
+  }
+
+  return out;
+}
+
+function gcd(a, b) {
+  let x = Math.abs(a);
+  let y = Math.abs(b);
+  while (y !== 0) {
+    const t = x % y;
+    x = y;
+    y = t;
+  }
+  return x;
+}
+
+function gcdBigInt(a, b) {
+  let x = a < 0n ? -a : a;
+  let y = b < 0n ? -b : b;
+  while (y !== 0n) {
+    const t = x % y;
+    x = y;
+    y = t;
+  }
+  return x;
+}
+
+function modPow(base, exp, mod) {
+  let b = ((base % mod) + mod) % mod;
+  let e = exp;
+  let acc = 1n;
+  while (e > 0n) {
+    if (e & 1n) acc = (acc * b) % mod;
+    b = (b * b) % mod;
+    e >>= 1n;
+  }
+  return acc;
+}
+
+function measurementsToInt(measurements, qubits) {
+  let out = 0;
+  const needed = new Set(qubits);
+  for (const m of measurements) {
+    if (!needed.has(m.qubit)) continue;
+    if (m.value) out |= 1 << m.qubit;
+    needed.delete(m.qubit);
+  }
+  if (needed.size > 0) {
+    throw new Error(`missing measurement(s) for: ${Array.from(needed).map((q) => `q${q}`).join(", ")}`);
+  }
+  return out;
+}
+
+function tryFactor({ N, a, Q, c }) {
+  if (!Number.isInteger(c) || c <= 0) return null;
+  const g = gcd(c, Q);
+  if (!Number.isInteger(g) || g <= 0) return null;
+
+  const r = Q / g;
+  if (r <= 1 || r % 2 !== 0) return null;
+
+  const bigN = BigInt(N);
+  const bigA = BigInt(a);
+  const x = modPow(bigA, BigInt(r / 2), bigN);
+
+  const f1 = gcdBigInt(x - 1n, bigN);
+  const f2 = gcdBigInt(x + 1n, bigN);
+  if (f1 === 1n || f1 === bigN) return null;
+  if (f2 === 1n || f2 === bigN) return null;
+
+  const n1 = Number(f1);
+  const n2 = Number(f2);
+  if (!Number.isFinite(n1) || !Number.isFinite(n2)) return null;
+  if (n1 * n2 !== N) return null;
+
+  return { r, factors: [Math.min(n1, n2), Math.max(n1, n2)] };
+}
+
 function buildQsimYaml(configObj) {
   const qubits = configObj?.circuit?.qubits;
   if (!Array.isArray(qubits) || qubits.length === 0) {
@@ -103,6 +515,8 @@ function buildQsimYaml(configObj) {
 
   let vectorIndex = 0;
   const seenSwaps = new Set();
+  let fxStarted = false;
+  const measured = new Array(qubits.length).fill(false);
 
   for (let col = 0; col < maxSegments; col++) {
     const ops = [];
@@ -136,6 +550,33 @@ function buildQsimYaml(configObj) {
           throw new Error(`MEASURE does not support controls at qubit ${qi}, segment ${col}`);
         }
         ops.push({ gate, target: qi, controls: [] });
+        continue;
+      }
+
+      if (gate === "FX") {
+        if (controlIndices.length > 0) {
+          throw new Error(`FX does not support controls at qubit ${qi}, segment ${col}`);
+        }
+
+        const fx = seg?.fx ?? {};
+        const funcRaw = fx?.function ?? "parity";
+        const func = String(funcRaw).trim().toLowerCase();
+        if (!["parity", "const0", "const1"].includes(func)) {
+          throw new Error(`FX gate has invalid function '${String(funcRaw)}' at qubit ${qi}, segment ${col}`);
+        }
+
+        const xbRaw = Array.isArray(fx?.x_bits) ? fx.x_bits : [];
+        const xIndices = [];
+        for (const bit of xbRaw) {
+          const id = String(bit);
+          const idx = idToIndex.get(id);
+          if (idx == null) {
+            throw new Error(`FX x_bits contains unknown qubit '${id}' at qubit ${qi}, segment ${col}`);
+          }
+          xIndices.push(idx);
+        }
+
+        ops.push({ gate, function: func, xBits: xIndices, controls: [] });
         continue;
       }
 
@@ -205,7 +646,26 @@ function buildQsimYaml(configObj) {
     out += `  - id: v${vectorIndex++}\n`;
     out += "    operations:\n";
 
-    for (const op of ops) {
+    const preOps = ops.filter((op) => op.gate !== "FX");
+    const fxOps = ops.filter((op) => op.gate === "FX");
+
+    if (fxStarted && preOps.length > 0) {
+      throw new Error(`quantum operation not allowed after FX (segment ${col})`);
+    }
+
+    for (const op of preOps) {
+      if (op.gate === "MEASURE") measured[op.target] = true;
+    }
+
+    for (const op of fxOps) {
+      for (const bit of op.xBits) {
+        if (!measured[bit]) {
+          throw new Error(`FX requires x_bits to be measured before use (segment ${col})`);
+        }
+      }
+    }
+
+    for (const op of [...preOps, ...fxOps]) {
       out += `      - gate: ${op.gate}\n`;
       if (op.controls?.length > 0) {
         out += `        controls: [${op.controls.map((i) => `q${i}`).join(", ")}]\n`;
@@ -216,6 +676,11 @@ function buildQsimYaml(configObj) {
           out += `        x_bits: [${op.xBits.map((i) => `q${i}`).join(", ")}]\n`;
         }
         out += `        y_bit: q${op.yBit}\n`;
+      } else if (op.gate === "FX") {
+        out += `        function: ${op.function}\n`;
+        if (op.xBits.length > 0) {
+          out += `        x_bits: [${op.xBits.map((i) => `q${i}`).join(", ")}]\n`;
+        }
       } else {
         const targets = op.targets ?? [op.target];
         out += `        targets: [${targets.map((i) => `q${i}`).join(", ")}]\n`;
@@ -225,6 +690,8 @@ function buildQsimYaml(configObj) {
         out += `          values: ${op.matrix}\n`;
       }
     }
+
+    if (fxOps.length > 0) fxStarted = true;
   }
 
   if (vectorIndex === 0) {
@@ -326,6 +793,41 @@ function buildUiConfigFromCircuitYamlText(yamlText) {
         continue;
       }
 
+      if (gate === "FX") {
+        if (controlIds.length > 0) {
+          throw new Error(`FX does not support controls in vector ${col}`);
+        }
+
+        const func = String(op?.function ?? "parity").trim().toLowerCase();
+        if (!["parity", "const0", "const1"].includes(func)) {
+          throw new Error(`invalid FX function '${String(op?.function)}' in vector ${col}`);
+        }
+
+        const xbRaw = Array.isArray(op?.x_bits) ? op.x_bits : [];
+        const xb = [];
+        for (const x of xbRaw) {
+          const idx = parseQubitIndex(x);
+          if (idx < 0 || idx >= qubitCount) throw new Error(`FX x_bits out of range in vector ${col}`);
+          xb.push(`q${idx}`);
+        }
+
+        let row = -1;
+        for (let r = 0; r < qubitCount; r++) {
+          const seg = config.circuit.qubits[r].segments[col];
+          if (!seg.gate || seg.gate === "none") {
+            row = r;
+            break;
+          }
+        }
+        if (row < 0) throw new Error(`cannot import: no empty row available for FX in vector ${col}`);
+
+        const seg = ensureEmpty(col, row, "FX");
+        seg.gate = "FX";
+        seg.fx = { function: func, x_bits: xb };
+        delete seg.controls;
+        continue;
+      }
+
       const targetsRaw = op?.targets;
       const targetList = Array.isArray(targetsRaw) ? targetsRaw : targetsRaw != null ? [targetsRaw] : [];
       const targets = targetList.map(parseQubitIndex);
@@ -360,11 +862,14 @@ function buildUiConfigFromCircuitYamlText(yamlText) {
         if (!Array.isArray(values[0]) || !Array.isArray(values[1])) throw new Error(`OTHER invalid values in vector ${col}`);
 
         function entry(r, c) {
-          const cell = values?.[r]?.[c] ?? {};
-          const re = mustNumber(cell.real ?? 0, `OTHER.values[${r}][${c}].real`);
-          const im = mustNumber(cell.imag ?? 0, `OTHER.values[${r}][${c}].imag`);
-          if (im !== 0) throw new Error("OTHER import only supports imag: 0");
-          return re;
+          const cell = values?.[r]?.[c];
+          if (cell != null && typeof cell === "object") {
+            const re = mustNumber(cell.real ?? cell.re ?? 0, `OTHER.values[${r}][${c}].real`);
+            const im = mustNumber(cell.imag ?? cell.im ?? 0, `OTHER.values[${r}][${c}].imag`);
+            return { real: Math.abs(re) < 1e-15 ? 0 : re, imag: Math.abs(im) < 1e-15 ? 0 : im };
+          }
+          const re = mustNumber(cell ?? 0, `OTHER.values[${r}][${c}]`);
+          return { real: Math.abs(re) < 1e-15 ? 0 : re, imag: 0 };
         }
 
         const seg = ensureEmpty(col, t, "OTHER");
@@ -389,6 +894,7 @@ function buildUiConfigFromCircuitYamlText(yamlText) {
         seg.gate = gate;
         delete seg.matrix;
         delete seg.uf;
+        delete seg.fx;
         delete seg.swapWith;
         if (gate === "MEASURE" && controlIds.length > 0) {
           throw new Error(`MEASURE does not support controls in vector ${col}`);
@@ -406,6 +912,18 @@ function buildUiConfigFromCircuitYamlText(yamlText) {
 export default function App() {
   const [config, setConfig] = useState(defaultConfig);
   const [output, setOutput] = useState("");
+  const [runTimes, setRunTimes] = useState(25);
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [functionToolOpen, setFunctionToolOpen] = useState(false);
+  const [functionToolMode, setFunctionToolMode] = useState("UF");
+  const [ufExpr, setUfExpr] = useState("x0 ^ x1");
+  const [ufVarCount, setUfVarCount] = useState(2);
+  const [ufValidation, setUfValidation] = useState({ ok: false, msg: "", truthTable: "" });
+  const [shorN, setShorN] = useState(15);
+  const [shorA, setShorA] = useState(2);
+  const [shorAttempts, setShorAttempts] = useState(25);
+  const [shorRunning, setShorRunning] = useState(false);
+  const [shorResult, setShorResult] = useState(null);
   const [hoverSegment, setHoverSegment] = useState(null);
   const [activeSegment, setActiveSegment] = useState(null);
   const canvasRef = useRef(null);
@@ -510,12 +1028,31 @@ export default function App() {
     if (!qubit) return;
     const segment = qubit.segments.find((s) => s.id === segmentId);
     if (!segment) return;
+    const segmentIndex = qubit.segments.findIndex((s) => s.id === segmentId);
+
+    function firstFxColumn(cfg) {
+      let first = Infinity;
+      for (const q of cfg.circuit.qubits) {
+        const segs = Array.isArray(q?.segments) ? q.segments : [];
+        for (let i = 0; i < segs.length; i++) {
+          if (normalizeGate(segs[i]?.gate) === "FX") first = Math.min(first, i);
+        }
+      }
+      return Number.isFinite(first) ? first : -1;
+    }
+
+    const fxCol = firstFxColumn(nextConfig);
+    if (gateType !== "none" && gateType !== "FX" && fxCol !== -1 && segmentIndex > fxCol) {
+      setOutput("Cannot add a quantum gate after FX.");
+      return;
+    }
 
     segment.gate = gateType;
 
     if (gateType === "none") {
       delete segment.matrix;
       delete segment.uf;
+      delete segment.fx;
       delete segment.swapWith;
       delete segment.controls;
       saveConfig(nextConfig);
@@ -530,6 +1067,7 @@ export default function App() {
         x4: 1
       };
       delete segment.uf;
+      delete segment.fx;
       delete segment.swapWith;
       if (Array.isArray(segment.controls)) {
         segment.controls = segment.controls.filter((id) => id !== qubitId);
@@ -545,16 +1083,42 @@ export default function App() {
             .filter((id) => id !== qubitId)
         });
       delete segment.matrix;
+      delete segment.fx;
       delete segment.swapWith;
       if (Array.isArray(segment.controls)) {
         segment.controls = segment.controls.filter((id) => id !== qubitId);
         if (segment.controls.length === 0) delete segment.controls;
       }
+    } else if (gateType === "FX") {
+      const measuredIds = [];
+      const seen = new Set();
+      for (const q of nextConfig.circuit.qubits) {
+        const segs = Array.isArray(q?.segments) ? q.segments : [];
+        for (let col = 0; col < Math.min(segmentIndex, segs.length); col++) {
+          if (normalizeGate(segs[col]?.gate) !== "MEASURE") continue;
+          if (seen.has(q.id)) break;
+          seen.add(q.id);
+          measuredIds.push(q.id);
+          break;
+        }
+      }
+
+      segment.fx =
+        segment.fx ??
+        ({
+          function: "parity",
+          x_bits: measuredIds
+        });
+      delete segment.matrix;
+      delete segment.uf;
+      delete segment.swapWith;
+      delete segment.controls;
     } else if (gateType === "SWAP") {
       const other = nextConfig.circuit.qubits.find((q) => q.id !== qubitId);
       segment.swapWith = other ? other.id : null;
       delete segment.matrix;
       delete segment.uf;
+      delete segment.fx;
       if (Array.isArray(segment.controls)) {
         segment.controls = segment.controls.filter(
           (id) => id !== qubitId && id !== segment.swapWith
@@ -564,11 +1128,13 @@ export default function App() {
     } else if (gateType === "MEASURE") {
       delete segment.matrix;
       delete segment.uf;
+      delete segment.fx;
       delete segment.swapWith;
       delete segment.controls;
     } else {
       delete segment.matrix;
       delete segment.uf;
+      delete segment.fx;
       delete segment.swapWith;
       if (Array.isArray(segment.controls)) {
         segment.controls = segment.controls.filter((id) => id !== qubitId);
@@ -609,24 +1175,179 @@ export default function App() {
     saveConfig(nextConfig);
   }
 
-  async function runProgram() {
-    const res = await fetch("/api/run", { method: "POST" });
-    const data = await res.json();
-    const text = data.stdout || data.stderr || data.err || "";
+	  function parseProgramText(text) {
+	    const measurements = [];
+	    const fxValues = [];
 
-    const measurements = [];
     for (const line of String(text).split(/\r?\n/)) {
-      const match = /^measure q(\d+)\s*=\s*([01])\b/.exec(line.trim());
-      if (!match) continue;
-      measurements.push({ qubit: Number(match[1]), value: Number(match[2]) });
+      const t = line.trim();
+      const m = /^measure q(\d+)\s*=\s*([01])\b/.exec(t);
+      if (m) {
+        measurements.push({ qubit: Number(m[1]), value: Number(m[2]) });
+        continue;
+      }
+
+      const fx = /^fx(?:\[[^\]]+\])?\s*=\s*([01])\b/i.exec(t);
+      if (fx) {
+        fxValues.push(Number(fx[1]));
+      }
     }
 
-    if (measurements.length > 0) {
-      measurements.sort((a, b) => a.qubit - b.qubit);
-      const bits = measurements.map((m) => String(m.value)).join("");
-      setOutput(bits);
+	    let bits = null;
+	    if (measurements.length > 0) {
+	      measurements.sort((a, b) => a.qubit - b.qubit);
+	      bits = measurements.map((m) => String(m.value)).join("");
+	    }
+
+	    return { bits, fxValues, measurements };
+	  }
+
+	  async function runOnce({ seed } = {}) {
+	    const init = { method: "POST" };
+	    if (seed != null) {
+	      init.headers = { "Content-Type": "application/json" };
+	      init.body = JSON.stringify({ seed });
+	    }
+	    const res = await fetch("/api/run", init);
+	    const data = await res.json();
+	    const text = data.stdout || data.stderr || data.err || "";
+	    return { text, ...parseProgramText(text) };
+	  }
+
+  async function runProgram() {
+    const { text, bits, fxValues } = await runOnce();
+
+    if (bits != null) {
+      let out = bits;
+      if (fxValues.length > 0) out += `\nf(x) = ${fxValues.join(", ")}`;
+      setOutput(out);
     } else {
       setOutput(text);
+    }
+  }
+
+  function formatCounts(counts, total) {
+    const entries = Array.from(counts.entries()).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    return entries
+      .map(([key, count]) => {
+        const pct = total > 0 ? Math.round((count / total) * 1000) / 10 : 0;
+        return `${key}  ${count}  (${pct}%)`;
+      })
+      .join("\n");
+  }
+
+  async function runProgramBatch() {
+    const nRaw = typeof runTimes === "number" ? runTimes : Number(runTimes);
+    const n = Number.isFinite(nRaw) ? Math.max(1, Math.min(500, Math.floor(nRaw))) : 1;
+
+    setBatchRunning(true);
+    try {
+      const outputs = new Map();
+      const fxOut = new Map();
+
+      for (let i = 0; i < n; i++) {
+        const { text, bits, fxValues } = await runOnce();
+        if (bits == null) {
+          setOutput(text || "No measurement output found.");
+          return;
+        }
+
+        const key = bits;
+        outputs.set(key, (outputs.get(key) ?? 0) + 1);
+
+        if (fxValues.length > 0) {
+          const fxKey = fxValues.length === 1 ? String(fxValues[0]) : fxValues.join(",");
+          fxOut.set(fxKey, (fxOut.get(fxKey) ?? 0) + 1);
+        }
+
+        if ((i + 1) % 5 === 0 || i === n - 1) {
+          let summary = `Runs: ${i + 1}/${n}\n\nOutputs:\n${formatCounts(outputs, i + 1)}`;
+          if (fxOut.size > 0) summary += `\n\nf(x):\n${formatCounts(fxOut, i + 1)}`;
+          setOutput(summary);
+        }
+      }
+    } finally {
+      setBatchRunning(false);
+    }
+  }
+
+  function validateUf() {
+    try {
+      const truthTable = validateUfExpression(ufExpr, ufVarCount);
+      setUfValidation({
+        ok: true,
+        msg: "Quantumly valid",
+        truthTable
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setUfValidation({
+        ok: false,
+        msg,
+        truthTable: ""
+      });
+    }
+  }
+
+  function loadShorCircuitIntoEditor() {
+    try {
+      const yamlText = shor15CircuitYamlVectors({ N: shorN, a: shorA });
+      const next = buildUiConfigFromCircuitYamlText(yamlText);
+      saveConfig(next);
+      setOutput(`Loaded Shor circuit (N=15, a=${shorA}). Click 'Run x times' to sample measurements.`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setOutput(msg);
+    }
+  }
+
+  async function runShor() {
+    const N = Number(shorN);
+    const a = Number(shorA);
+    const attempts = Math.max(1, Math.min(200, Math.floor(Number(shorAttempts) || 25)));
+
+    setShorRunning(true);
+    setShorResult(null);
+    try {
+      const yamlText = shor15CircuitYamlVectors({ N, a });
+      const next = buildUiConfigFromCircuitYamlText(yamlText);
+      await saveConfig(next);
+
+      const Q = 16;
+      const histogram = new Map();
+
+      for (let i = 0; i < attempts; i++) {
+        const seed = 1 + i;
+        const { measurements } = await runOnce({ seed });
+        const c = measurementsToInt(measurements, [0, 1, 2, 3]);
+        histogram.set(c, (histogram.get(c) ?? 0) + 1);
+
+        const factored = tryFactor({ N, a, Q, c });
+        if (factored) {
+          const msg = `factors (base10): ${factored.factors.join(" × ")}\nN=${N}  a=${a}  r=${factored.r}  attempts=${i + 1}`;
+          setOutput(msg);
+          setShorResult({ ok: true, msg });
+          return;
+        }
+
+        if ((i + 1) % 5 === 0 || i === attempts - 1) {
+          const entries = Array.from(histogram.entries()).sort((x, y) => x[0] - y[0]);
+          const histText = entries.map(([k, v]) => `${k}: ${v}`).join("  ");
+          setOutput(`Shor runs: ${i + 1}/${attempts}\nN=${N}  a=${a}\n\nc histogram: ${histText}`);
+        }
+      }
+
+      const entries = Array.from(histogram.entries()).sort((x, y) => x[0] - y[0]);
+      const histText = entries.map(([k, v]) => `${k}: ${v}`).join("  ");
+      const msg = `failed to recover non-trivial factors; try more attempts\nN=${N}  a=${a}\n\nc histogram: ${histText}`;
+      setOutput(msg);
+      setShorResult({ ok: false, msg });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setOutput(msg);
+      setShorResult({ ok: false, msg });
+    } finally {
+      setShorRunning(false);
     }
   }
 
@@ -743,6 +1464,15 @@ export default function App() {
       return `# Error generating circuit YAML: ${msg}\n`;
     }
   }, [config]);
+
+  const shorCircuitYamlPreview = useMemo(() => {
+    try {
+      return shor15CircuitYamlVectors({ N: shorN, a: shorA });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return `# Error generating Shor circuit YAML: ${msg}\n`;
+    }
+  }, [shorN, shorA]);
 
   const controlOverlay = useMemo(() => {
     const qubits = config?.circuit?.qubits;
@@ -912,7 +1642,16 @@ export default function App() {
         <button onClick={zoomOut}>Zoom Out</button>
         <button onClick={resetView}>Reset View</button>
         <button onClick={addRow}>Add Row</button>
-        <button onClick={runProgram}>Run C Program</button>
+        <button
+          onClick={() => {
+            setFunctionToolOpen(true);
+          }}
+        >
+          Add f(x) or UF
+        </button>
+        <button onClick={runProgram} disabled={batchRunning}>
+          Run C Program
+        </button>
         <button onClick={resetCircuit}>Reset Circuit</button>
 
         <p>Zoom: {Math.round(view.scale * 100)}%</p>
@@ -929,6 +1668,19 @@ export default function App() {
         </details>
 
         <h3>Measured Bits</h3>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+          <input
+            type="number"
+            min={1}
+            max={500}
+            value={runTimes}
+            onChange={(e) => setRunTimes(Number(e.target.value))}
+            style={{ width: 90 }}
+          />
+          <button onClick={runProgramBatch} disabled={batchRunning}>
+            Run x times
+          </button>
+        </div>
         <pre style={styles.outputBox}>{output}</pre>
       </div>
 
@@ -983,7 +1735,8 @@ export default function App() {
                   const isActive =
                     activeSegment?.qubitId === qubit.id &&
                     activeSegment?.segmentId === segment.id;
-                  const gateLabel = segment.gate === "MEASURE" ? "M" : segment.gate;
+                  const gateLabel =
+                    segment.gate === "MEASURE" ? "M" : segment.gate === "FX" ? "f" : segment.gate;
 
                   return (
                     <g
@@ -1125,7 +1878,7 @@ export default function App() {
 	                </select>
 	              </div>
 
-                {hasGate && segment.gate !== "MEASURE" && (
+                {hasGate && segment.gate !== "MEASURE" && segment.gate !== "FX" && (
                   <div style={styles.popupRow}>
                     <span style={styles.popupLabel}>Ctrl</span>
                     <select
@@ -1158,6 +1911,56 @@ export default function App() {
                   </div>
                 )}
 	
+                {segment.gate === "FX" && (
+                  <>
+                    <div style={styles.popupRow}>
+                      <span style={styles.popupLabel}>f(x)</span>
+                      <select
+                        style={styles.popupSelect}
+                        value={segment.fx?.function ?? "parity"}
+                        onChange={(e) => {
+                          const nextConfig = structuredClone(config);
+                          const q = nextConfig.circuit.qubits.find((qq) => qq.id === qubit.id);
+                          const s = q?.segments.find((ss) => ss.id === segment.id);
+                          if (!s) return;
+                          s.fx = s.fx ?? { function: "parity", x_bits: [] };
+                          s.fx.function = e.target.value;
+                          saveConfig(nextConfig);
+                        }}
+                      >
+                        <option value="parity">parity</option>
+                        <option value="const0">const0</option>
+                        <option value="const1">const1</option>
+                      </select>
+                    </div>
+
+                    <div style={styles.popupRow}>
+                      <span style={styles.popupLabel}>x</span>
+                      <select
+                        style={{ ...styles.popupSelect, height: 140 }}
+                        multiple
+                        value={segment.fx?.x_bits ?? []}
+                        onChange={(e) => {
+                          const selected = Array.from(e.target.selectedOptions).map((o) => o.value);
+                          const nextConfig = structuredClone(config);
+                          const q = nextConfig.circuit.qubits.find((qq) => qq.id === qubit.id);
+                          const s = q?.segments.find((ss) => ss.id === segment.id);
+                          if (!s) return;
+                          s.fx = s.fx ?? { function: "parity", x_bits: [] };
+                          s.fx.x_bits = selected;
+                          saveConfig(nextConfig);
+                        }}
+                      >
+                        {config.circuit.qubits.map((qq) => (
+                          <option key={qq.id} value={qq.id}>
+                            {qq.id}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </>
+                )}
+
 	              {segment.gate === "UF" && (
 	                <>
                   <div style={styles.popupRow}>
@@ -1313,6 +2116,146 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {functionToolOpen && (
+          <div
+            style={styles.modalOverlay}
+            onMouseDown={() => setFunctionToolOpen(false)}
+          >
+            <div
+              style={{ ...styles.modal, width: 560 }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 style={{ marginTop: 0 }}>Add f(x) or UF</h3>
+
+              <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 12 }}>
+                <span style={{ fontWeight: "bold" }}>Mode</span>
+                <select
+	                  value={functionToolMode}
+	                  onChange={(e) => {
+	                    setFunctionToolMode(e.target.value);
+	                    setUfValidation({ ok: false, msg: "", truthTable: "" });
+	                    setShorResult(null);
+	                  }}
+	                >
+	                  <option value="UF">UF (boolean f(x))</option>
+	                  <option value="SHOR">Shor (8 qubits, Circuit YAML)</option>
+	                </select>
+	              </div>
+
+              {functionToolMode === "UF" && (
+                <>
+                  <div style={{ marginBottom: 8 }}>
+                    <div style={{ fontWeight: "bold", marginBottom: 6 }}>UF function</div>
+                    <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 8 }}>
+                      Expression uses variables <code>x0</code>..<code>x7</code> with operators{" "}
+                      <code>!</code>, <code>&amp;</code>, <code>^</code>, <code>|</code> and parentheses.
+                    </div>
+
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+                      <span style={{ width: 120 }}>x bit count</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={8}
+                        value={ufVarCount}
+                        onChange={(e) => setUfVarCount(Number(e.target.value))}
+                        style={{ width: 80 }}
+                      />
+                      <button onClick={validateUf}>Validate</button>
+                    </div>
+
+                    <textarea
+                      value={ufExpr}
+                      onChange={(e) => setUfExpr(e.target.value)}
+                      spellCheck={false}
+                      style={{ ...styles.modalTextarea, height: 80, marginBottom: 8 }}
+                    />
+
+                    <div style={{ fontSize: 12, marginBottom: 6 }}>
+                      <span style={{ fontWeight: "bold" }}>Quantumly valid:</span>{" "}
+                      {ufValidation.ok ? "yes" : "no"}
+                    </div>
+
+                    {ufValidation.msg && (
+                      <pre style={ufValidation.ok ? styles.modalHint : styles.modalError}>{ufValidation.msg}</pre>
+                    )}
+
+                    {ufValidation.ok && ufValidation.truthTable && (
+                      <pre style={styles.modalHint}>
+                        truth table ({ufValidation.truthTable.length}): {ufValidation.truthTable}
+                      </pre>
+                    )}
+                  </div>
+                </>
+              )}
+
+	              {functionToolMode === "SHOR" && (
+	                <>
+	                  <div style={{ fontWeight: "bold", marginBottom: 6 }}>Shor (8 qubits → Circuit YAML)</div>
+	                  <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 10 }}>
+	                    Generates a compiled circuit for <code>N=15</code> and loads it into the editor. Supported{" "}
+	                    <code>a</code> values: <code>2</code> or <code>8</code>.
+	                  </div>
+
+	                  <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+	                    <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+	                      <span style={{ width: 26 }}>N</span>
+	                      <input
+	                        type="number"
+	                        value={shorN}
+                        onChange={(e) => setShorN(Number(e.target.value))}
+                        style={{ width: 90 }}
+	                      />
+	                    </label>
+	                    <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+	                      <span style={{ width: 26 }}>a</span>
+	                      <input
+                        type="number"
+                        value={shorA}
+                        onChange={(e) => setShorA(Number(e.target.value))}
+                        style={{ width: 90 }}
+	                      />
+	                    </label>
+	                    <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+	                      <span style={{ width: 70 }}>attempts</span>
+	                      <input
+                        type="number"
+                        min={1}
+                        max={200}
+                        value={shorAttempts}
+	                        onChange={(e) => setShorAttempts(Number(e.target.value))}
+	                        style={{ width: 90 }}
+	                      />
+		                    </label>
+		                    <button onClick={loadShorCircuitIntoEditor} disabled={shorRunning}>
+		                      Load circuit
+		                    </button>
+		                    <button onClick={runShor} disabled={shorRunning}>
+		                      {shorRunning ? "Running..." : "Run Shor"}
+		                    </button>
+		                  </div>
+
+	                  <textarea
+	                    value={shorCircuitYamlPreview}
+	                    readOnly
+	                    spellCheck={false}
+	                    style={{ ...styles.modalTextarea, height: 200, marginBottom: 8 }}
+	                  />
+
+	                  {shorResult && (
+	                    <pre style={shorResult.ok ? styles.modalHint : styles.modalError}>{shorResult.msg ?? ""}</pre>
+	                  )}
+	                </>
+	              )}
+
+              <div style={styles.modalButtons}>
+                <button onClick={() => setFunctionToolOpen(false)}>Close</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1433,6 +2376,14 @@ const styles = {
     borderRadius: "8px",
     overflow: "auto",
     maxHeight: "140px"
+  },
+  modalHint: {
+    background: "#f3f3f3",
+    color: "#111",
+    padding: "10px",
+    borderRadius: "8px",
+    overflow: "auto",
+    maxHeight: "240px"
   },
   modalButtons: {
     marginTop: "10px",

@@ -2,7 +2,6 @@ import express from "express";
 import fs from "fs/promises";
 import YAML from "yaml";
 import { execFile } from "child_process";
-import path from "path";
 
 const app = express();
 app.use(express.json());
@@ -21,7 +20,13 @@ app.post("/api/config", async (req, res) => {
 });
 
 app.post("/api/run", (req, res) => {
-  execFile("bash", ["./server/scripts/run.sh"], (err, stdout, stderr) => {
+  const seed = req.body?.seed;
+  const env = { ...process.env };
+  if (seed != null && String(seed).trim() !== "") {
+    env.QSIM_SEED = String(seed).trim();
+  }
+
+  execFile("bash", ["./server/scripts/run.sh"], { env }, (err, stdout, stderr) => {
     if (err) {
       return res.status(500).json({ err: err.message, stderr });
     }

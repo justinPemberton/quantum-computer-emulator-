@@ -44,6 +44,7 @@ Supported gates:
 - `OTHER` (custom 2×2 matrix)
 - `UF` oracle: `y_bit: qN`, optional `x_bits: [...]`, `function: parity|const0|const1`
 - `MEASURE` (collapses the state and prints a readout line)
+- `FX` (classical f(x) transform): `function: parity|const0|const1`, optional `x_bits: [...]` (must be measured before use). Prints an `fx = 0|1` line. No quantum ops are allowed after `FX`.
 
 Example `UF` + `MEASURE`:
 

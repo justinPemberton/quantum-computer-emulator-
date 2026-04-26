@@ -21,6 +21,12 @@ typedef struct {
         UfFunction function;
         int *x_bits;
         size_t x_bit_count;
+    } fx;
+
+    struct {
+        UfFunction function;
+        int *x_bits;
+        size_t x_bit_count;
         int y_bit;
     } uf;
 } CircuitOp;

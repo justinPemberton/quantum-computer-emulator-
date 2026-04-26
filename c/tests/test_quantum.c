@@ -118,7 +118,7 @@ int main(void)
         Complex *scratch = malloc(s.size * sizeof(Complex));
         assert(scratch);
 
-        assert(sim_run(&c, &s, scratch, NULL, NULL) == 0);
+        assert(sim_run(&c, &s, scratch, NULL, NULL, NULL) == 0);
         expect_complex_close(s.data[0], INV_SQRT2, 0.0);
         expect_complex_close(s.data[3], INV_SQRT2, 0.0);
         assert(fabs(qs_norm2(&s) - 1.0) < 1e-12);
@@ -228,7 +228,7 @@ int main(void)
         assert(scratch);
 
         MeasurementHistory m;
-        assert(sim_run(&c, &s, scratch, NULL, &m) == 0);
+        assert(sim_run(&c, &s, scratch, NULL, &m, NULL) == 0);
         assert(m.count == 1);
         assert(m.events[0].qubit == 1);
         assert(m.events[0].value == 1);
@@ -242,6 +242,112 @@ int main(void)
         free(scratch);
         qs_free(&s);
         circuit_free(&c);
+        remove(path);
+    }
+
+    {
+        const char *yaml =
+            "qubits: 1\n"
+            "vectors:\n"
+            "  - id: v0\n"
+            "    operations:\n"
+            "      - gate: X\n"
+            "        targets: [q0]\n"
+            "  - id: v1\n"
+            "    operations:\n"
+            "      - gate: MEASURE\n"
+            "        targets: [q0]\n"
+            "  - id: v2\n"
+            "    operations:\n"
+            "      - gate: FX\n"
+            "        function: parity\n"
+            "        x_bits: [q0]\n";
+
+        char path[] = "/tmp/qsim-test-XXXXXX";
+        int fd = mkstemp(path);
+        assert(fd >= 0);
+        FILE *f = fdopen(fd, "w");
+        assert(f);
+        fputs(yaml, f);
+        fclose(f);
+
+        Circuit c;
+        char *err = NULL;
+        assert(circuit_load_yaml_file(path, &c, &err) == 0);
+        free(err);
+
+        QuantumState s;
+        assert(qs_init(&s, c.qubit_count) == 0);
+        Complex *scratch = malloc(s.size * sizeof(Complex));
+        assert(scratch);
+
+        FxHistory fx;
+        assert(sim_run(&c, &s, scratch, NULL, NULL, &fx) == 0);
+        assert(fx.count == 1);
+        assert(fx.events[0].value == 1);
+        sim_fx_free(&fx);
+
+        free(scratch);
+        qs_free(&s);
+        circuit_free(&c);
+        remove(path);
+    }
+
+    {
+        const char *yaml =
+            "qubits: 1\n"
+            "vectors:\n"
+            "  - id: v0\n"
+            "    operations:\n"
+            "      - gate: FX\n"
+            "        function: parity\n"
+            "        x_bits: [q0]\n";
+
+        char path[] = "/tmp/qsim-test-XXXXXX";
+        int fd = mkstemp(path);
+        assert(fd >= 0);
+        FILE *f = fdopen(fd, "w");
+        assert(f);
+        fputs(yaml, f);
+        fclose(f);
+
+        Circuit c;
+        char *err = NULL;
+        assert(circuit_load_yaml_file(path, &c, &err) != 0);
+        free(err);
+        remove(path);
+    }
+
+    {
+        const char *yaml =
+            "qubits: 1\n"
+            "vectors:\n"
+            "  - id: v0\n"
+            "    operations:\n"
+            "      - gate: MEASURE\n"
+            "        targets: [q0]\n"
+            "  - id: v1\n"
+            "    operations:\n"
+            "      - gate: FX\n"
+            "        function: parity\n"
+            "        x_bits: [q0]\n"
+            "  - id: v2\n"
+            "    operations:\n"
+            "      - gate: H\n"
+            "        targets: [q0]\n";
+
+        char path[] = "/tmp/qsim-test-XXXXXX";
+        int fd = mkstemp(path);
+        assert(fd >= 0);
+        FILE *f = fdopen(fd, "w");
+        assert(f);
+        fputs(yaml, f);
+        fclose(f);
+
+        Circuit c;
+        char *err = NULL;
+        assert(circuit_load_yaml_file(path, &c, &err) != 0);
+        free(err);
         remove(path);
     }
 
