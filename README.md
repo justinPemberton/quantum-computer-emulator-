@@ -140,3 +140,4 @@ npm run dev
 ```sh
 nix-shell
 ```
+<img width="2560" height="1436" alt="image" src="https://github.com/user-attachments/assets/4983bdba-6948-474b-8e53-299157585b4e" />
