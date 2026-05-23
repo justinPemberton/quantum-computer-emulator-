@@ -992,6 +992,7 @@ export default function App() {
   function addRow() {
     const nextConfig = structuredClone(config);
     const qubits = nextConfig.circuit.qubits;
+    if (qubits.length >= 64) return;
     const lastQubit = qubits[qubits.length - 1];
     const nextId = nextQubitId(qubits);
     const nextY = lastQubit ? lastQubit.y + ROW_GAP : 160;
@@ -2284,7 +2285,7 @@ export default function App() {
                   title="Quantum Info Page"
                   srcDoc={infoPageHtml}
                   style={{ width: "100%", height: "100%", border: "none" }}
-                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                  sandbox="allow-scripts allow-forms allow-popups"
                 />
               </div>
             </div>
