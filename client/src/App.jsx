@@ -992,7 +992,7 @@ export default function App() {
   function addRow() {
     const nextConfig = structuredClone(config);
     const qubits = nextConfig.circuit.qubits;
-    if (qubits.length >= 64) return;
+    if (qubits.length >= 65) return;
     const lastQubit = qubits[qubits.length - 1];
     const nextId = nextQubitId(qubits);
     const nextY = lastQubit ? lastQubit.y + ROW_GAP : 160;
