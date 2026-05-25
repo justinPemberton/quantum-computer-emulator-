@@ -14,7 +14,19 @@ app.get("/api/config", async (req, res) => {
 });
 
 app.post("/api/config", async (req, res) => {
-  const yamlText = YAML.stringify(req.body);
+  const body = req.body;
+  if (
+    body === null ||
+    typeof body !== "object" ||
+    Array.isArray(body) ||
+    typeof body.circuit !== "object" ||
+    body.circuit === null ||
+    !Array.isArray(body.circuit?.qubits) ||
+    body.circuit.qubits.length > 64
+  ) {
+    return res.status(400).json({ err: "invalid config shape" });
+  }
+  const yamlText = YAML.stringify(body);
   await fs.writeFile(CONFIG_PATH, yamlText);
   res.json({ ok: true });
 });

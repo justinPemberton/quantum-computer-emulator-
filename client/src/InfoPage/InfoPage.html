@@ -818,12 +818,20 @@
         
         function renderCircuitTimeline() {
             const container = document.getElementById('circuit-timeline');
-            let html = '';
-            circuitGates.forEach(g => {
-                html += `<div class="timeline-gate">${g}</div>`;
-            });
-            if (html === '') html = '<em style="opacity:0.5;">No gates applied yet…</em>';
-            container.innerHTML = html;
+            container.textContent = '';
+            if (circuitGates.length === 0) {
+                const em = document.createElement('em');
+                em.style.opacity = '0.5';
+                em.textContent = 'No gates applied yet…';
+                container.appendChild(em);
+            } else {
+                circuitGates.forEach(g => {
+                    const div = document.createElement('div');
+                    div.className = 'timeline-gate';
+                    div.textContent = g;
+                    container.appendChild(div);
+                });
+            }
         }
         
         function updateStateVectorDisplay() {
